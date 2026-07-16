@@ -54,20 +54,13 @@ release: prepare dist
 prepare: clean
 	mkdir -p $(BUILD_DIR)
 
-clean-compile : clean main.o userfw.o
+clean-compile : clean main.o
 
 main.o: prepare
 	$(VASM) $(VASMFLAGS) $(SOURCES_DIR)/main.s -o $(BUILD_DIR)/main.o
 
-userfw.o: prepare
-	$(VASM) $(VASMFLAGS) $(SOURCES_DIR)/userfw.s -o $(BUILD_DIR)/userfw.o
-
-# (fbdrv.s used to be a separate object built here; Story 4.7
-# follow-up inlined the body as the FBDRV_INLINE macro in userfw.s
-# and removed the standalone file + linker section.)
-
 .PHONY: build
-build: main.o userfw.o
+build: main.o
 	$(VLINK) $(addprefix $(BUILD_DIR)/,$^) $(VLINKFLAGS) -o $(BUILD_DIR)/$(BIN)
 
 

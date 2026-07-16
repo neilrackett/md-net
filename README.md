@@ -1,3 +1,20 @@
+# MD/Net
+
+> **Work in progress.** MD/Net is a SidecarTridge Multi-device
+> microfirmware that will emulate the NetUSBee cartridge's NE2000
+> Ethernet for the Atari ST, bridging to the LAN over the Pico W's
+> WiFi. The current milestone is the foundation only: the firmware
+> joins your WiFi network (credentials from the Booster global config)
+> and the ST prints `MD/Net connected: <IP>` at boot before continuing
+> to GEM. NE2000/RTL8019AS register emulation (captured via the
+> `commemul` ROM3 ring), the lwIP packet bridge, and STinG/MiNTNet
+> driver compatibility are future phases.
+>
+> The graphics, audio, and keyboard pipelines of the framebuffer
+> template this repo was forked from have been stripped. The rest of
+> this README describes that original template and is pending a
+> rewrite.
+
 # md-framebuffer-template
 
 A template for building **sub-20-millisecond audiovisual SidecarTridge

@@ -1,10 +1,10 @@
 {
   "uuid": "<APP_UUID>",
-  "name": "APP DEV Template",
-  "description": "Microfirmware Application Template for Atari ST",
+  "name": "MD/Net: NetUSBee-compatible networking",
+  "description": "NetUSBee-compatible Ethernet over WiFi for Atari ST (WIP: WiFi bootstrap + boot message)",
   "image": "https://placehold.co/256x256/png",
   "tags": [
-    "Sample",
+    "Network"
   ],
   "devices": [
     "ST",

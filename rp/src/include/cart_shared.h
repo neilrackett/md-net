@@ -4,16 +4,10 @@
  *
  * The cart shared region at $FA0000..$FAFFFF on the m68k mirrors RP
  * RAM starting at __rom_in_ram_start__. This header defines the
- * region's sub-block offsets (cart image, command sentinel, dirty
- * frame counter, indexed shared variables, palette, audio buffer,
- * APP_FREE, framebuffer) plus the cart_asM68kLong() helper for
- * exact-value uint32_t RP→m68k writes (see the
- * project_cartbus_long_byteswap memory note).
- *
- * The constants used to live in `chandler.h` under the `CHANDLER_*`
- * prefix. The chandler / TPROTOCOL command-channel machinery was
- * removed; the layout constants survived the
- * cull because IKBD and the framebuffer pipeline both need them.
+ * region's sub-block offsets (cart image, command sentinel, indexed
+ * shared variables, MD/Net status + message, APP_FREE) plus the
+ * cart_asM68kLong() / cart_writeM68kString() helpers for exact-value
+ * RP→m68k writes across the cart-bus byte-swap.
  *
  * Layout must match target/atarist/src/main.s on the m68k side.
  */
@@ -28,156 +22,54 @@
  * ROM4_ADDR ($FA0000) on the m68k side. Layout (single source of
  * truth, must match target/atarist/src/main.s):
  *
- *   $FA0000  CARTRIDGE             m68k header + code (max 16 KB).
- *                                  The unrolled MOVEM-loop cart->ST
- *                                  copy is emitted inline into
- *                                  userfw.s by the FBDRV_INLINE
- *                                  macro (there is no separate
- *                                  fbdrv block at $2000 any more).
- *   $FA4000  CMD_MAGIC_SENTINEL    4 B  (m68k polls here for
- *                                        NOP / RESET / BOOT_GEM / START)
- *   $FA4004  (reserved)            8 B  (was RANDOM_TOKEN +
- *                                        RANDOM_TOKEN_SEED for the
- *                                        former TPROTOCOL handshake;
- *                                        unused)
- *   $FA400C  FB_FRAME_COUNTER      4 B  (RP-incremented dirty-frame
- *                                        marker; m68k VBL loop skips
- *                                        the cart->ST blit when this
- *                                        is unchanged since the
- *                                        previous iteration)
+ *   $FA0000  CARTRIDGE             m68k header + code (max 16 KB)
+ *   $FA4000  CMD_MAGIC_SENTINEL    4 B  (RP→m68k command word;
+ *                                        unused this milestone, RP
+ *                                        leaves CART_CMD_NOP)
+ *   $FA4004  (reserved)           12 B
  *   $FA4010  SHARED_VARIABLES    240 B  (60 indexed 4-byte slots.
- *                                        Slots 12..19 hold PALETTE
- *                                        below -- the other 52 slots
- *                                        are app-free.)
- *   $FA4040    PALETTE            32 B  (slots 12..19; 16 ST colour
- *                                        words, applied to
- *                                        $FFFF8240.. by the m68k VBL
- *                                        handler every frame)
- *   $FA4100  AUDIO_BUFFER       1024 B  (Timer-B (vA,vB) YM volume
- *                                        pairs; see below)
- *   $FA4500  APP_FREE          15872 B  (~15.5 KB free arena, ends at
- *                                        FRAMEBUFFER)
- *   $FA8300  FRAMEBUFFER       32000 B  (320x200 4 bpp low-res)
+ *                                        Slot 0 = MDNET_STATUS; the
+ *                                        rest are app-free.)
+ *   $FA4100  MDNET_MSG           256 B  (NUL-terminated boot message
+ *                                        composed by the RP)
+ *   $FA4200  APP_FREE                   (free arena to end of region)
  *   $FAFFFF  end of region
  */
 #define CART_CARTRIDGE_CODE_SIZE         0x4000  /* 16 KB cart-image budget */
 #define CART_SHARED_BLOCK_OFFSET         CART_CARTRIDGE_CODE_SIZE
 #define CART_CMD_SENTINEL_OFFSET         CART_SHARED_BLOCK_OFFSET
-#define CART_FB_FRAME_COUNTER_OFFSET     (CART_SHARED_BLOCK_OFFSET + 0x0C)
 #define CART_SHARED_VARIABLES_OFFSET     (CART_SHARED_BLOCK_OFFSET + 0x10)
 #define CART_SHARED_VARIABLES_SLOTS      60      /* 240 bytes total */
 
-/* 16-entry ST palette published by the RP, applied by the m68k VBL
- * handler to $FFFF8240..$FFFF825E each frame. Format: 16 contiguous
- * 16-bit words. Each word is the standard ST 9-bit palette format
- * 0000.0RRR.0GGG.0BBB. uint16_t writes are transparent across the
- * cart-bus byte-swap so the RP can write the m68k-observable word
- * value directly.
- *
- * Lives inside SHARED_VARIABLES (slots 12..19 = offsets +0x30..0x4F
- * = absolute $FA4040..$FA405F). Apps that don't want RP-driven
- * palette publishing can leave the slot at zeros (= black palette
- * = all-black screen) and write $FFFF8240 from their own m68k code
- * instead. */
-#define CART_PALETTE_OFFSET                                                   \
-  (CART_SHARED_VARIABLES_OFFSET + (12 * 4))      /* $4040 */
-#define CART_PALETTE_ENTRIES             16
-#define CART_PALETTE_SIZE                (CART_PALETTE_ENTRIES * 2)  /* 32 B */
+/* MD/Net boot status, polled by the m68k boot code (SHARED_VARIABLES
+ * slot 0). Written RP-side via cart_asM68kLong(). Terminal states
+ * (CONNECTED / FAILED) must be written AFTER the message buffer, with
+ * __sync_synchronize() in between, so the m68k never prints a stale
+ * message. The m68k long-read is two word reads, but tearing is
+ * benign here: the m68k-visible high word is 0 for every state. */
+#define CART_MDNET_STATUS_SLOT           0
+#define CART_MDNET_STATUS_OFFSET                                              \
+  (CART_SHARED_VARIABLES_OFFSET + (CART_MDNET_STATUS_SLOT * 4))
+#define CART_MDNET_STATUS_BOOTING        0u
+#define CART_MDNET_STATUS_CONNECTING     1u
+#define CART_MDNET_STATUS_CONNECTED      2u
+#define CART_MDNET_STATUS_FAILED         3u
 
-/* Audio sample buffer. Dual-channel YM2149 PCM: each sample is a
- * (vA, vB) pair of YM volume nibbles, 2 bytes per sample, giving ~6
- * effective bits from the YM's log volume curve. The m68k Timer-B
- * IRQ handler fires at ~5,585 Hz (TIMERB_COUNT=110 in userfw.s) and
- * reads one pair per fire -- ~112 samples (~224 B) per PAL VBL. The
- * read cursor (A0) does NOT wrap here: userfw_vbl resets it to the
- * buffer base every vsync, and the RP-side audio.c rewrites the
- * whole 1024 B each VBL, so the buffer is overfilled by ~800 B as
- * drift headroom. audio.c's AUDIO_BYTES_PER_VBL must match the
- * Timer-B rate (= 2 x fires-per-VBL) or the source pointer drifts. */
-#define CART_AUDIO_BUFFER_OFFSET                                              \
-  (CART_SHARED_VARIABLES_OFFSET + (CART_SHARED_VARIABLES_SLOTS * 4))
-#define CART_AUDIO_BUFFER_SIZE           1024
+/* Boot message shown on the ST via GEMDOS Cconws: a NUL-terminated
+ * string (CR/LF included by the RP), stored byte-pair-swapped via
+ * cart_writeM68kString(). The boot-time ERASE_FIRMWARE_IN_RAM()
+ * zero-fill guarantees it is always a valid (empty) string. */
+#define CART_MDNET_MSG_OFFSET            (CART_SHARED_BLOCK_OFFSET + 0x100)
+#define CART_MDNET_MSG_SIZE              256
 
-/* APP_FREE arena starts after the audio buffer. */
-#define CART_APP_FREE_OFFSET                                                  \
-  (CART_AUDIO_BUFFER_OFFSET + CART_AUDIO_BUFFER_SIZE)
+/* APP_FREE arena runs from the end of the message buffer to the top
+ * of the 64 KB region. */
+#define CART_APP_FREE_OFFSET             (CART_MDNET_MSG_OFFSET + CART_MDNET_MSG_SIZE)
+#define CART_REGION_END                  0x10000  /* 64 KB shared region top */
 
-/* Framebuffer sized for low-res 4 bpp (320 x 200 = 32000 bytes). Sits
- * flush against the top of the 64 KB region: end = $FB0000 exactly,
- * start = $FB0000 - 32000 = $FA8300. APP_FREE's upper bound is
- * implicitly the framebuffer base. */
-#define CART_FRAMEBUFFER_SIZE         32000
-#define CART_FRAMEBUFFER_OFFSET       (0x10000 - CART_FRAMEBUFFER_SIZE)
-#define CART_REGION_END               0x10000  /* 64 KB shared region top */
-
-/* ---------------------------------------------------------------------
- * Framebuffer chunk layout for the m68k MOVEM blit
- *
- * The m68k FBDRV_INLINE macro copies the cart framebuffer into a
- * hidden ST screen page using a fully unrolled
- *
- *     movem.l (a6)+, d0-d7/a1-a4        ; read 48 bytes
- *     movem.l d0-d7/a1-a4, -(a5)        ; predec store, reverse-order
- *
- * pair per iteration (A0 and A7 omitted from the list: A0 is the
- * dedicated Timer-B audio buffer pointer, A7 keeps the supervisor
- * SP valid so IRQs may fire during the macro). The predec store
- * mode is 4 cycles per iter faster than `d16(a5)` displacement mode
- * (8+8n vs 12+8n on 68000), but it writes each 12-longword group in
- * REVERSE memory order relative to the source -- chunks land in the
- * destination screen page from the END (page+31968) down to the
- * START (page+0).
- *
- * For the screen to display the correct image, the cart-FB at
- * $FA8300 must therefore be laid out with the image's 48-byte chunks
- * already pre-reversed:
- *
- *     cart-FB chunk K (bytes K*48 .. K*48+47)
- *       holds image chunk (665-K)
- *
- *   i.e.:
- *     cart-FB bytes      0 ..    47   <-- image bytes 31920 .. 31967
- *     cart-FB bytes     48 ..    95   <-- image bytes 31872 .. 31919
- *     ...
- *     cart-FB bytes  31920 .. 31967   <-- image bytes     0 ..    47
- *     cart-FB bytes  31968 .. 31999   <-- natural-order 32-byte tail
- *
- * Within each 48-byte chunk the bytes are in natural order; only the
- * chunk-level sequence is reversed.
- *
- * The 32-byte tail at image bytes 31968..31999 (= last 64 pixels of
- * scanline 199) is handled by a separate small `d16(a5)` MOVEM
- * after the main predec unroll, so the RP leaves those bytes in
- * NATURAL (non-reversed) order at cart-FB[31968..31999].
- *
- * Chunks DO NOT align with scanlines (LCM(48, 160) = 480), so this
- * is not a simple row reversal -- each m68k chunk covers exactly
- * scanline (112 pixels at 4 bpp) and may span row boundaries. The
- * RP-side c2p (rp/src/fb_chunked_asm.S + fb_chunked.c) is responsible
- * for emitting the reversed layout. The simplest implementation is
- * to keep c2p's natural row-major output going to a 32 KB scratch
- * buffer in RP RAM, then do a chunk-reversed memcpy from scratch to
- * the cart FB once both cores finish (~120 us / frame, well under
- * fb_render_frame's main-loop budget). Per-byte address arithmetic
- * inside the c2p hot path is also possible but more invasive.
- *
- * Cost / benefit:
- *   - m68k saves ~4 cyc/iter * 571 iters = ~2284 cyc / VBL (~285 us)
- *   - m68k boot adds one `lea (FB_CHUNK_COVERED)(a5), a5` per VBL (~12 cyc)
- *   - RP adds ~120 us / frame for the scratch->cart-FB reverse memcpy
- *   - Net: ~285 us VBL slack reclaimed on the m68k side
- */
-#define CART_FB_CHUNK_BYTES           48   /* size of one m68k MOVEM-burst group (12 longwords; A0 and A7 omitted -- A0 is the dedicated Timer-B audio pointer, A7 is the SP) */
-#define CART_FB_BLIT_LINES            200  /* must match FB_COPY_LINES in target/atarist/src/userfw.s */
-#define CART_FB_BLIT_BYTES            (CART_FB_BLIT_LINES * 160)  /* total bytes the m68k blits per VBL (160 = ST 4bpp scanline) */
-#define CART_FB_CHUNK_COUNT           (CART_FB_BLIT_BYTES / CART_FB_CHUNK_BYTES)  /* iterations of the unrolled MOVEM-pair */
-#define CART_FB_CHUNK_COVERED         (CART_FB_CHUNK_BYTES * CART_FB_CHUNK_COUNT)
-#define CART_FB_CHUNK_TAIL            (CART_FB_BLIT_BYTES - CART_FB_CHUNK_COVERED)  /* bytes copied by the m68k via d16(a5) MOVEM after the main predec unroll */
-
-/* RP→m68k command sentinel values. The m68k polls the longword at
- * CART_CMD_SENTINEL_OFFSET; non-zero values steer it out of the
- * userfw loop or the bootstrap dispatcher. Must match the m68k-side
- * equs in target/atarist/src/main.s. */
+/* RP→m68k command sentinel values. Retained for future use (the
+ * m68k boot code no longer stays resident to poll them). Must match
+ * the m68k-side equs in target/atarist/src/main.s. */
 #define CART_CMD_NOP        0u
 #define CART_CMD_RESET      1u
 #define CART_CMD_BOOT_GEM   2u
@@ -197,6 +89,20 @@
  * distinct writes regardless of the swap. */
 static inline uint32_t cart_asM68kLong(uint32_t v) {
   return (v << 16) | (v >> 16);
+}
+
+/* Write a C string so the m68k reads it byte-for-byte: because of the
+ * within-word byte-swap, m68k byte [k] is RP byte [k ^ 1]. Always
+ * NUL-terminates (truncating to maxLen - 1 source bytes). The swap
+ * touches dst[i ^ 1], so the buffer must be at least an even number
+ * of bytes long and word-aligned (both true for CART_MDNET_MSG). */
+static inline void cart_writeM68kString(volatile uint8_t *dst, const char *src,
+                                        uint32_t maxLen) {
+  uint32_t i = 0;
+  for (; src[i] != '\0' && i < maxLen - 1; i++) {
+    dst[i ^ 1] = (uint8_t)src[i];
+  }
+  dst[i ^ 1] = 0;
 }
 
 #endif /* CART_SHARED_H */

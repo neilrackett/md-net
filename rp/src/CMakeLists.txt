@@ -32,10 +32,8 @@ set(PICO_BOARD ${BOARD_TYPE})
 # Determine board type macros
 if("${BOARD_TYPE}" STREQUAL "pico_w")
     add_compile_definitions(BOARD_TYPE_PICO_W=1 BOARD_TYPE_PICO=0 BOARD_TYPE_CUSTOM16MB=0)
-elseif("${BOARD_TYPE}" STREQUAL "pico")
-    add_compile_definitions(BOARD_TYPE_PICO_W=0 BOARD_TYPE_PICO=1 BOARD_TYPE_CUSTOM16MB=0)
-elseif("${BOARD_TYPE}" STREQUAL "sidecartos_16mb")
-    add_compile_definitions(BOARD_TYPE_PICO_W=0 BOARD_TYPE_PICO=1 BOARD_TYPE_CUSTOM16MB=0)
+elseif("${BOARD_TYPE}" STREQUAL "pico" OR "${BOARD_TYPE}" STREQUAL "sidecartos_16mb")
+    message(FATAL_ERROR "MD/Net requires WiFi; build with BOARD_TYPE=pico_w")
 else()
     message(FATAL_ERROR "Unknown BOARD_TYPE: ${BOARD_TYPE}")
 endif()
@@ -99,24 +97,11 @@ pico_generate_pio_header(${PROJECT_NAME} ${CMAKE_CURRENT_LIST_DIR}/commemul.pio)
 
 target_sources(${PROJECT_NAME} PRIVATE
         aconfig.c
-        audio.c
         commemul.c
         emul.c
-        fb.c
-        fb_blit.c
-        fb_blit_asm.S
-        fb_chunked.c
-        fb_chunked_asm.S
-        fb_font.c
         gconfig.c
-        ikbd.c
         hw_config.c
-        palette.c
-        demo_menu.c
-        demo_parallax.c
-        demo_3d.c
-        demo_sprites.c
-        demo_cojorotozoom.c
+        network.c
         reset.c
         romemul.c
         sdcard.c
@@ -130,12 +115,20 @@ pico_add_extra_outputs(${PROJECT_NAME})
 target_link_libraries(${PROJECT_NAME} PRIVATE
     ${LINK_LIBRARIES}        # External or additional libraries passed as variables
     hardware_flash           # Flash memory access
-    hardware_interp          # SIO interpolators (cojorotozoom texel addressing)
     no-OS-FatFS-SD-SDIO-SPI-RPi-Pico                # FATFS library
     pico_stdlib              # Core functionality
     pico_multicore          # Multicore support
     settings                 # Custom settings library
 )
+
+# WiFi + lwIP (polling mode). pico_cyw43_arch_lwip_poll defines
+# PICO_CYW43_ARCH_POLL=1 itself; lwipopts.h lives in rp/src (already on
+# the include path above).
+if (PICO_CYW43_SUPPORTED)
+    target_link_libraries(${PROJECT_NAME} PRIVATE pico_cyw43_arch_lwip_poll)
+else()
+    message(FATAL_ERROR "CYW43 not supported by this board; MD/Net requires pico_w")
+endif()
 
 
 # Link custom memmap with reserved memory for ROMs

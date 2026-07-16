@@ -15,11 +15,6 @@ working_folder=$1
 build_type=$2
 target_firmware="target_firmware.h"
 
-# (fbdrv.s used to be regenerated here by gen_fbdrv.py before the
-# m68k make. Epic 4 Story 4.7 dropped that step -- src/fbdrv.s is now
-# a hand-written, version-controlled file. The Makefile assembles it
-# alongside main.s and userfw.s like any other source.)
-
 # ST_WORKING_FOLDER=$working_folder/configurator stcmd make $build_type
 # STCMD_NO_TTY=1 keeps docker working when invoked from non-TTY contexts
 # (CI, sub-shells, build wrappers). Without it stcmd's `-it` flag aborts
