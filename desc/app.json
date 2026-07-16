@@ -1,8 +1,8 @@
 {
   "uuid": "<APP_UUID>",
-  "name": "MD/Net: NetUSBee-compatible networking",
-  "description": "NetUSBee-compatible Ethernet over WiFi for Atari ST (WIP: WiFi bootstrap + boot message)",
-  "image": "https://placehold.co/256x256/png",
+  "name": "MD/Net: Wireless Internet",
+  "description": "Wireless internet on your Atari ST. NetUSBee-compatible Ethernet-over-WiFi that works with STinG and MiNTNet. For more information, see <a href=\"https://neilrackett.com/atarist\">https://neilrackett.com/atarist</a>.",
+  "image": "https://atarist.neilrackett.com/<APP_UUID>.png",
   "tags": [
     "Network"
   ],
@@ -12,7 +12,7 @@
     "MegaST",
     "MegaSTE"
   ],
-  "binary": "https://atarist.sidecartridge.com/<APP_UUID>-<APP_VERSION>.uf2",
+  "binary": "https://atarist.neilrackett.com/<APP_UUID>.uf2",
   "md5": "<BINARY_MD5_HASH>",
   "version": "<APP_VERSION>"
 }

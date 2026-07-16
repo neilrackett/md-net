@@ -88,6 +88,13 @@ static void on_rom3_sample(uint16_t sample) {
   uint8_t data = mdnet_sample_data(sample);
   ne2000_reg_write(&s_chip, reg, data);
 
+  // Log control-register writes (not the high-volume data port) so a
+  // STinG probe shows its ei_probe1 sequence on the UART -- the on-device
+  // validation for the ROM3 capture + decode path.
+  if (reg != CR_DATAPORT_REG) {
+    DPRINTF("mdnet W reg=%02x data=%02x\n", reg, data);
+  }
+
   // A command-register write may arm a remote-DMA read (prep the stream)
   // or a transmit (handled in the bridge poll). Everything else just
   // updates state we re-stage below.
