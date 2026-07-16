@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "mdnet.h"
 #include "ne2000.h"
 
 // 8390 register offsets / command bits, mirrored from the driver.
@@ -208,10 +209,28 @@ static void test_tx_roundtrip(void) {
   printf("PASS: TX stage -> take_tx round trip\n");
 }
 
+// The EtherNEC ROM3 write encoding must round-trip through the commemul
+// sample decode: offset = (reg<<9)|(data<<1) -> reg, data.
+static void test_rom3_decode(void) {
+  for (uint8_t reg = 0; reg < 0x20; reg++) {
+    for (int d = 0; d < 256; d++) {
+      uint16_t sample = (uint16_t)(((uint16_t)reg << 9) | ((uint16_t)d << 1));
+      assert(mdnet_sample_reg(sample) == reg);
+      assert(mdnet_sample_data(sample) == (uint8_t)d);
+    }
+  }
+  // Register-read staging offset: reg N read is served from ROM4 byte
+  // (N<<9)^1.
+  assert(MDNET_REG_READ_OFFSET(0x07) == ((0x07u << 9) ^ 1u));
+  assert(MDNET_REG_READ_OFFSET(0x00) == 1u);
+  printf("PASS: ROM3 sample decode + ROM4 read-offset\n");
+}
+
 int main(void) {
   test_probe_prom();
   test_rx_roundtrip();
   test_tx_roundtrip();
+  test_rom3_decode();
   printf("all NE2000 core tests pass\n");
   return 0;
 }

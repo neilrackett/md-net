@@ -28,6 +28,7 @@
 #include "debug.h"
 #include "ff.h"
 #include "gconfig.h"
+#include "mdnet.h"
 #include "memfunc.h"
 #include "network.h"
 #include "pico/stdlib.h"
@@ -141,13 +142,23 @@ void emul_start() {
   }
   DPRINTF("%s", msg);
 
-  // Idle loop: service lwIP/cyw43 and the SELECT button. The ST has
-  // printed the message and continued booting to GEM by now; the
-  // network stack stays up for the next milestone's packet bridge.
+  // Bring up the NE2000 model and switch the ROM4 mirror to its
+  // register-read staging map. The ST has shown the boot message and
+  // continued to GEM by now, so repainting the (already-relocated)
+  // cartridge image is safe -- see docs/ne2000-emulation.md for the
+  // warm-reset caveat.
+  mdnet_init();
+  mdnet_activate();
+
+  // Idle loop: drain the cartridge bus into the NE2000 model, run the
+  // packet bridge, service lwIP/cyw43 and the SELECT button. Kept tight
+  // (short cyw43 wait) so commemul is drained and the register map
+  // re-staged fast enough for the driver's probe/poll cadence.
   DPRINTF("Entering main loop\n");
   while (true) {
+    mdnet_poll();
     network_safePoll();
-    cyw43_arch_wait_for_work_until(make_timeout_time_ms(100));
+    cyw43_arch_wait_for_work_until(make_timeout_time_ms(1));
     select_checkPushReset();
   }
 }

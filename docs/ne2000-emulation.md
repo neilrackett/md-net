@@ -1,9 +1,25 @@
 # MD/Net milestone 2 — NE2000 emulation design
 
-Status: **design + hardware-independent core.** The register-file state
-machine (`rp/src/ne2000.c`) and its host test are done; the cartridge-bus
-integration (serving register reads, the data-port auto-increment path)
-is specified here but not yet wired — it needs on-hardware iteration.
+Status: **design + core + bus integration (register path), minus the
+data-port serve path.** Done and building into the firmware:
+`rp/src/ne2000.c` (chip model, host-tested), `rp/src/mdnet.c` (bus glue:
+commemul ROM3-write decode → chip, chip register reads → ROM4 mirror,
+main-loop poll), wired into `emul.c`. **Not yet working:** the remote-DMA
+**data-port read** serve path (§ "Open problem 1") — which the MAC-PROM
+probe and RX depend on — so STinG cannot yet fully detect the card. That
+path needs the dedicated auto-incrementing PIO/DMA and on-hardware
+iteration. Register writes, TX-byte capture and register-read staging use
+only the existing hardware and are ready to validate on-device.
+
+### What can be tested on hardware right now
+
+Load STinG's EtherNEC driver on the ST; on the RP debug UART the register
+writes STinG issues during its probe (`ei_probe1`) are decoded and fed to
+the chip model. Add a `DPRINTF` in `mdnet.c on_rom3_sample()` to log
+`reg`/`data` and confirm the sequence matches `NE.S` (soft-reset write,
+`ISR` ack, `DCR=$48`, `RXCR=$20`, `TXCR=$02`, the `RCNT`/`RSAR` setup, the
+`CR=RREAD` that arms the PROM read). That validates the ROM3 capture +
+decode half end-to-end before the data-port path exists.
 
 This document is the implementation spec. The reference sources are the
 EtherNEC/EtherNE driver (`SRC/NE.S`, `SRC/8390.I`, `SRC/BUSENEC.I`,

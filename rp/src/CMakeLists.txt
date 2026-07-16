@@ -101,6 +101,8 @@ target_sources(${PROJECT_NAME} PRIVATE
         emul.c
         gconfig.c
         hw_config.c
+        mdnet.c
+        ne2000.c
         network.c
         reset.c
         romemul.c
