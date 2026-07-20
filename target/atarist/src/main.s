@@ -169,7 +169,7 @@ boot_gem:
 ; 40-column low-res screen.
 	include version.inc
 connecting_txt:
-	dc.b $d,$a,"MD/Net: connecting...",$d,$a,0
+	dc.b $d,$a,"MD/Net connecting...",$d,$a,0
 timeout_txt:
 	dc.b "MD/Net: no response from device.",$d,$a,0
 	even
