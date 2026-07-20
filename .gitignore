@@ -66,3 +66,5 @@ __pycache__/
 *.pyc
 /uuid.txt
 .DS_Store
+# Generated boot banner (from version.txt at build time)
+target/atarist/src/version.inc

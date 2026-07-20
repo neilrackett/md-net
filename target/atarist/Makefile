@@ -56,7 +56,12 @@ prepare: clean
 
 clean-compile : clean main.o
 
+# Generate the boot banner (banner_txt) with the version substituted from
+# version.txt, so main.s can `include version.inc`. Done here (not via vasm
+# -D string macros, which vasm won't concatenate in dc.b) so the shipped
+# banner always matches the build version.
 main.o: prepare
+	printf 'banner_txt:\tdc.b "MD/Net $(VERSION) (c)2026 Neil Rackett",13,10\n\tdc.b "GPLv3 neilrackett.com/atarist",13,10,0\n\teven\n' > $(SOURCES_DIR)/version.inc
 	$(VASM) $(VASMFLAGS) $(SOURCES_DIR)/main.s -o $(BUILD_DIR)/main.o
 
 .PHONY: build

@@ -69,6 +69,12 @@ fi
 if [ -d "$REPO_ROOT/target" ]; then
     printf "%s\n" "$FINAL_VERSION" > "$REPO_ROOT/target/version.txt"
 fi
+# The m68k build runs inside a Docker mount rooted at target/atarist, so its
+# Makefile can only read target/atarist/version.txt (not the repo root). Keep
+# it in sync so the cartridge boot banner shows the shipped version.
+if [ -d "$REPO_ROOT/target/atarist" ]; then
+    printf "%s\n" "$FINAL_VERSION" > "$REPO_ROOT/target/atarist/version.txt"
+fi
 
 if [ -n "$HEADER_PATH" ]; then
     mkdir -p "$(dirname "$HEADER_PATH")"
