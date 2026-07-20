@@ -25,6 +25,7 @@
 #include "debug.h"
 #include "ne2000.h"
 #include "network.h"
+#include "lwip/pbuf.h"
 #include "pico/cyw43_arch.h"
 
 // 8390 command-register bits we watch for side effects at the bus layer.
@@ -110,19 +111,49 @@ static void on_rom3_sample(uint16_t sample) {
 static void bridge_poll(void) {
   // TX: hand any queued frame to the WiFi side. Data-port writes captured
   // above already filled the tx page; take_tx yields the staged frame.
+  // Because STinG uses the Pico's own STA MAC, the frame goes out on WiFi
+  // with the right source address -- no rewrite needed.
   static uint8_t txbuf[NE2000_MTU];
   uint16_t txlen = ne2000_take_tx(&s_chip, txbuf);
   if (txlen > 0) {
-    // TODO(hardware): emit via cyw43 raw ethernet
-    // (cyw43_send_ethernet(&cyw43_state, CYW43_ITF_STA, txlen, txbuf,
-    // false)). Needs on-device validation of the L2 bridge / MAC handling.
-    DPRINTF("mdnet TX %u bytes (bridge not yet wired)\n",
-            (unsigned)txlen);
+    int err = cyw43_send_ethernet(&cyw43_state, CYW43_ITF_STA, txlen, txbuf,
+                                  false);
+    if (err != 0) {
+      DPRINTF("mdnet TX %u bytes failed: %d\n", (unsigned)txlen, err);
+    }
   }
+  // RX runs from the netif input tap (mdnet_netif_input), not here.
+}
 
-  // RX: frames arriving from lwIP/cyw43 are pushed via ne2000_deliver_rx()
-  // from the netif input hook (TODO: install it). deliver_rx sets ISR_RX,
-  // which we re-stage so the polling driver sees the pending packet.
+// RX tap: every Ethernet frame the CYW43 receives passes through the STA
+// netif's input function. We copy it into the NE2000 rx ring (deliver_rx
+// sets ISR_RX, which restage_registers() surfaces to the polling driver),
+// then chain to lwIP's original input so the Pico's own stack keeps
+// working. Frames arrive here already addressed to our shared MAC (plus
+// broadcast/multicast), so no promiscuous mode is needed.
+static netif_input_fn s_orig_input = NULL;
+
+static err_t mdnet_netif_input(struct pbuf *p, struct netif *inp) {
+  uint16_t len = p->tot_len;
+  if (s_active && len >= 14u && len <= NE2000_MTU) {
+    static uint8_t rxbuf[NE2000_MTU];
+    pbuf_copy_partial(p, rxbuf, len, 0);
+    ne2000_deliver_rx(&s_chip, rxbuf, len);
+  }
+  if (s_orig_input != NULL) {
+    return s_orig_input(p, inp);
+  }
+  pbuf_free(p);
+  return ERR_OK;
+}
+
+static void install_rx_tap(void) {
+  struct netif *n = &cyw43_state.netif[CYW43_ITF_STA];
+  if (n->input != mdnet_netif_input) {
+    s_orig_input = n->input;
+    n->input = mdnet_netif_input;
+    DPRINTF("mdnet: RX tap installed on STA netif\n");
+  }
 }
 
 void mdnet_init(void) {
@@ -132,6 +163,7 @@ void mdnet_init(void) {
   }
   ne2000_reset(&s_chip, mac);
   dataport_init();  // ROM4 tap + Core 1 data-port servicer
+  install_rx_tap();  // intercept WiFi RX frames into the NE2000 ring
   DPRINTF("mdnet: NE2000 model ready, MAC %02x:%02x:%02x:%02x:%02x:%02x\n",
           mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 }
