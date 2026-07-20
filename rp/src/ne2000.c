@@ -223,19 +223,47 @@ uint8_t ne2000_reg_read(ne2000_t *chip, uint8_t reg) {
   }
 }
 
+// Copy n bytes into the ring at *off, wrapping at the ring end (at most one
+// split). src == NULL zero-fills. Advances *off. Using memcpy/memset here
+// (rather than a per-byte modulo loop) keeps delivery to a couple of
+// microseconds so it never blocks Core 1's register-staging for long.
+static void ring_write(ne2000_t *chip, uint16_t *off, const uint8_t *src,
+                       uint16_t n) {
+  uint16_t o = *off;
+  while (n > 0u) {
+    uint16_t chunk = (uint16_t)(NE2000_RING_BYTES - o);
+    if (chunk > n) {
+      chunk = n;
+    }
+    if (src != NULL) {
+      memcpy(&chip->mem[o], src, chunk);
+      src += chunk;
+    } else {
+      memset(&chip->mem[o], 0, chunk);
+    }
+    o = (uint16_t)((o + chunk) % NE2000_RING_BYTES);
+    n = (uint16_t)(n - chunk);
+  }
+  *off = o;
+}
+
 bool ne2000_deliver_rx(ne2000_t *chip, const uint8_t *frame, uint16_t len) {
-  if (!chip->started) {
+  // Accept only when the receiver is started AND out of monitor mode
+  // (RXCR bit 5 = accept-no-packets). This drops the broadcast flood that
+  // arrives after the probe starts the chip but before the driver opens
+  // the port for receive.
+  if (!chip->started || (chip->rcr & 0x20u)) {
     return false;
   }
   // Pad to the 60-byte Ethernet minimum, then append a 4-byte CRC slot the
   // driver discards; the on-ring frame is (padded frame + CRC).
   uint16_t frame_len = len < 60u ? 60u : len;
-  uint16_t on_ring = frame_len + 4u;  // + CRC
+  uint16_t on_ring = (uint16_t)(frame_len + 4u);  // + CRC
   if (on_ring > NE2000_MTU) {
     return false;  // oversize, drop
   }
   // Standard 8390 header byte count includes the 4 header bytes.
-  uint16_t count = on_ring + 4u;
+  uint16_t count = (uint16_t)(on_ring + 4u);
   uint16_t pages = (uint16_t)((count + NE2000_PAGE_SIZE - 1u) /
                               NE2000_PAGE_SIZE);
 
@@ -252,31 +280,22 @@ bool ne2000_deliver_rx(ne2000_t *chip, const uint8_t *frame, uint16_t len) {
     return false;
   }
 
-  // Write header + frame into the ring starting at start_page, wrapping at
-  // pstop. mem[] is indexed from page pstart-relative... actually from the
-  // ring first page (0x40); pages pstart.. live at mem[(page-0x40)*256].
-  uint16_t ring_off =
+  // mem[] is indexed from the ring first page ($40); page P lives at
+  // mem[(P - $40) * 256].
+  uint16_t off =
       (uint16_t)((start_page - NE2000_RING_FIRST_PAGE) * NE2000_PAGE_SIZE);
-  uint16_t ring_size = NE2000_RING_BYTES;
-
   uint8_t header[4] = {
-      0x01u,                      // RSR: ENRSR_RXOK
-      next_page,                  // next packet page
-      (uint8_t)(count & 0xFFu),   // count low
+      0x01u,                            // RSR: ENRSR_RXOK
+      next_page,                        // next packet page
+      (uint8_t)(count & 0xFFu),         // count low
       (uint8_t)((count >> 8) & 0xFFu),  // count high
   };
-  for (int i = 0; i < 4; i++) {
-    chip->mem[ring_off] = header[i];
-    ring_off = (uint16_t)((ring_off + 1u) % ring_size);
+  ring_write(chip, &off, header, 4u);
+  ring_write(chip, &off, frame, len);   // real received bytes
+  if (frame_len > len) {
+    ring_write(chip, &off, NULL, (uint16_t)(frame_len - len));  // min-frame pad
   }
-  for (uint16_t i = 0; i < frame_len; i++) {
-    chip->mem[ring_off] = (i < len) ? frame[i] : 0u;  // pad tail with zeros
-    ring_off = (uint16_t)((ring_off + 1u) % ring_size);
-  }
-  for (int i = 0; i < 4; i++) {  // CRC placeholder
-    chip->mem[ring_off] = 0u;
-    ring_off = (uint16_t)((ring_off + 1u) % ring_size);
-  }
+  ring_write(chip, &off, NULL, 4u);     // CRC placeholder
 
   chip->curr = next_page;
   chip->isr |= NE2000_ISR_RX;

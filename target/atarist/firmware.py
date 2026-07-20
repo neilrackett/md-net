@@ -28,9 +28,13 @@ def binary_to_c_array(input_source, output_file, array_name, endian_format="litt
     else:
         trimmed_data = data[: last_non_zero_index + 1]
 
-    # Ensure that the trimmed binary data has an even length (since we're handling words)
+    # Ensure the trimmed data is an even number of bytes (we emit 16-bit
+    # words). Trimming trailing zeros can strip the padding byte the
+    # assembler's `even` directive added, leaving an odd length; restore one
+    # zero byte rather than failing the whole build (which would silently
+    # leave a stale target_firmware.h).
     if len(trimmed_data) % 2 != 0:
-        raise ValueError("The binary file size (after trimming zeros) should be an even number of bytes for word processing.")
+        trimmed_data += b"\x00"
 
     # Prepare the output content. The array MUST be 4-byte aligned: the
     # RP2040 boot path copies it into ROM_IN_RAM with the XIP stream DMA

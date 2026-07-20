@@ -180,14 +180,21 @@ static void __not_in_flash_func(mdnet_core1_loop)(void) {
   for (;;) {
     dataport_service();               // serve data-port reads
     commemul_poll(on_rom3_sample);    // register + TX-byte writes
-    uint16_t n;
-    while ((n = rxq_pop(rxbuf)) > 0) {  // deliver received frames
+
+    // Deliver at most ONE queued frame per iteration, and drain the command
+    // bus again right after: a ring write must never delay the driver's
+    // page-select long enough for it to read a stale register 7 (ISR where
+    // it expects CURR), which self-locks the receive loop.
+    uint16_t n = rxq_pop(rxbuf);
+    if (n > 0) {
       if (ne2000_deliver_rx(&s_chip, rxbuf, n)) {
         s_rxDelivered++;
       } else {
         s_rxDropped++;
       }
+      commemul_poll(on_rom3_sample);
     }
+
     uint16_t t = ne2000_take_tx(&s_chip, txbuf);  // hand off transmit frames
     if (t > 0) {
       if (txq_push(txbuf, t)) {
