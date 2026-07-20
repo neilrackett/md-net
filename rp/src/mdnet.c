@@ -3,15 +3,20 @@
  * Description: Cartridge-bus integration for the NE2000 model. See mdnet.h
  *              and docs/ne2000-emulation.md.
  *
- * What works with today's hardware:
- *   - register writes  (ROM3 dummy reads captured by commemul -> chip)
- *   - TX packet bytes  (data-port writes are ROM3 reads, also captured)
- *   - register reads    (staged into the ROM4 RAM mirror romemul serves)
+ * Core split:
+ *   - Core 1 owns the NE2000 chip and all cartridge-bus servicing: it
+ *     drains the commemul ROM3 ring (register + TX-byte writes), restages
+ *     register reads into the ROM4 mirror, serves the data port, and moves
+ *     frames in/out of the ring. Doing this on a dedicated core gives the
+ *     microsecond latency the driver's back-to-back page-switch-then-read
+ *     sequences need -- Core 0's poll loop was too slow, so the driver read
+ *     a stale register-7 (ISR instead of CURR) and the RX loop failed.
+ *   - Core 0 owns WiFi/lwIP. Frames cross between the cores through two
+ *     single-producer/single-consumer queues (rx: Core 0 -> Core 1,
+ *     tx: Core 1 -> Core 0), so neither core touches the other's state.
  *
- * What still needs the dedicated data-port PIO serve path (hardware
- * bring-up): the remote-DMA data-port READ stream -- the MAC PROM the
- * probe reads and RX packet bytes. mdnet_prepareReadStream() builds the
- * byte stream that path will emit; the PIO/DMA wiring is TODO.
+ * All chip access is on Core 1; the only exception is the MAC-PROM pre-arm
+ * in mdnet_activate(), done before Core 1 is launched.
  */
 
 #include "mdnet.h"
@@ -23,10 +28,12 @@
 #include "constants.h"
 #include "dataport.h"
 #include "debug.h"
+#include "lwip/pbuf.h"
 #include "ne2000.h"
 #include "network.h"
-#include "lwip/pbuf.h"
 #include "pico/cyw43_arch.h"
+#include "pico/multicore.h"
+#include "pico/platform.h"
 
 // 8390 command-register bits we watch for side effects at the bus layer.
 #define CR_TRANS 0x04u
@@ -34,103 +41,169 @@
 #define CR_DATAPORT_REG 0x10u
 
 static ne2000_t s_chip;
-static bool s_active = false;  // ROM4 repainted as the register map?
+static volatile bool s_active = false;
 
-// Linear byte stream the data-port read path will emit, rebuilt each time
-// the driver arms a remote-DMA read. (Consumed by the PIO serve path once
-// that lands; staged here so the logic is ready and testable.)
+// Stream scratch for building a data-port read (Core 1 only).
 static uint8_t s_readStream[NE2000_MTU + 32];
-static uint16_t s_readStreamLen = 0;
+
+// Cross-core SPSC frame queues. rx: Core 0 (WiFi) -> Core 1 (ring);
+// tx: Core 1 (ring) -> Core 0 (WiFi). head is written only by the
+// producer, tail only by the consumer.
+#define FRM_CAP 1536u
+#define RXQ_SLOTS 8u
+#define TXQ_SLOTS 4u
+
+static struct {
+  volatile uint16_t head, tail;
+  uint16_t len[RXQ_SLOTS];
+  uint8_t data[RXQ_SLOTS][FRM_CAP];
+} s_rxq;
+
+static struct {
+  volatile uint16_t head, tail;
+  uint16_t len[TXQ_SLOTS];
+  uint8_t data[TXQ_SLOTS][FRM_CAP];
+} s_txq;
+
+// Diagnostics (Core 1 writes, Core 0 logs).
+static volatile uint32_t s_rxDelivered = 0, s_rxDropped = 0;
+static volatile uint32_t s_txSent = 0, s_txDropped = 0;
+
+static bool rxq_push(const uint8_t *f, uint16_t len) {
+  uint16_t h = s_rxq.head;
+  uint16_t nh = (uint16_t)((h + 1u) % RXQ_SLOTS);
+  if (nh == s_rxq.tail || len > FRM_CAP) {
+    return false;
+  }
+  memcpy(s_rxq.data[h], f, len);
+  s_rxq.len[h] = len;
+  __sync_synchronize();
+  s_rxq.head = nh;
+  return true;
+}
+
+static uint16_t rxq_pop(uint8_t *out) {
+  uint16_t t = s_rxq.tail;
+  if (t == s_rxq.head) {
+    return 0;
+  }
+  uint16_t len = s_rxq.len[t];
+  memcpy(out, s_rxq.data[t], len);
+  __sync_synchronize();
+  s_rxq.tail = (uint16_t)((t + 1u) % RXQ_SLOTS);
+  return len;
+}
+
+static bool txq_push(const uint8_t *f, uint16_t len) {
+  uint16_t h = s_txq.head;
+  uint16_t nh = (uint16_t)((h + 1u) % TXQ_SLOTS);
+  if (nh == s_txq.tail || len > FRM_CAP) {
+    return false;
+  }
+  memcpy(s_txq.data[h], f, len);
+  s_txq.len[h] = len;
+  __sync_synchronize();
+  s_txq.head = nh;
+  return true;
+}
+
+static uint16_t txq_pop(uint8_t *out) {
+  uint16_t t = s_txq.tail;
+  if (t == s_txq.head) {
+    return 0;
+  }
+  uint16_t len = s_txq.len[t];
+  memcpy(out, s_txq.data[t], len);
+  __sync_synchronize();
+  s_txq.tail = (uint16_t)((t + 1u) % TXQ_SLOTS);
+  return len;
+}
 
 static volatile uint8_t *rom4_bytes(void) {
   return (volatile uint8_t *)&__rom_in_ram_start__;
 }
 
-// Stage one register's read value into the ROM4 mirror at (reg<<9)^1.
-static void stage_reg(uint8_t reg) {
-  uint8_t val = ne2000_reg_read(&s_chip, reg);
-  rom4_bytes()[MDNET_REG_READ_OFFSET(reg)] = val;
-}
-
 // Re-stage every register the driver polls for the currently selected
-// page (the page is chip state, so the same ROM4 address serves the
-// page-0 or page-1 meaning depending on the last CR write). The data port
-// ($10) and reset ($1f) are never staged here -- the data port is served
-// by its own path, and reg reads for $00..$0f are non-mutating.
+// page (register 7 is ISR in page 0 but CURR in page 1, at the same ROM4
+// address -- so the page-select CR write must flip the staged byte before
+// the driver's next read). The data port ($10) and reset ($1f) are never
+// staged here.
 static void restage_registers(void) {
+  volatile uint8_t *r = rom4_bytes();
   for (uint8_t reg = 0; reg <= 0x0Fu; reg++) {
-    stage_reg(reg);
+    r[MDNET_REG_READ_OFFSET(reg)] = ne2000_reg_read(&s_chip, reg);
   }
 }
 
 // Build the data-port read stream from the chip for the armed remote-DMA
-// read (RSAR..RSAR+RCNT). This mirrors what the auto-incrementing serve
-// path will emit; it reads the chip through the same non-destructive
-// path the bus would, then rewinds RSAR/RCNT so the real transfer still
-// happens when the ST reads it out.
+// read and hand it to the serve path. Non-destructive: rewinds RSAR/RCNT
+// so the ST's own reads reproduce the transfer.
 static void prepare_read_stream(void) {
-  uint16_t rsar = s_chip.rsar;
-  uint16_t rcnt = s_chip.rcnt;
-  s_readStreamLen = 0;
+  uint16_t rsar = s_chip.rsar, rcnt = s_chip.rcnt;
   uint16_t n = rcnt;
   if (n > sizeof(s_readStream)) {
     n = sizeof(s_readStream);
   }
   for (uint16_t i = 0; i < n; i++) {
-    s_readStream[s_readStreamLen++] = ne2000_reg_read(&s_chip, 0x10u);
+    s_readStream[i] = ne2000_reg_read(&s_chip, 0x10u);
   }
-  // Rewind: the stream is a preview; the ST's own reads must reproduce it.
   s_chip.rsar = rsar;
   s_chip.rcnt = rcnt;
-
-  // Hand the stream to Core 1 to serve as the ST reads the data port.
-  dataport_arm(s_readStream, s_readStreamLen);
+  dataport_arm(s_readStream, n);
 }
 
-// commemul callback: one ROM3 sample == one EtherNEC register/data write.
+// commemul callback (Core 1): one ROM3 sample == one EtherNEC register or
+// data-port write.
 static void on_rom3_sample(uint16_t sample) {
   uint8_t reg = mdnet_sample_reg(sample);
   uint8_t data = mdnet_sample_data(sample);
   ne2000_reg_write(&s_chip, reg, data);
 
-  // Log control-register writes (not the high-volume data port) so a
-  // STinG probe shows its ei_probe1 sequence on the UART -- the on-device
-  // validation for the ROM3 capture + decode path.
-  if (reg != CR_DATAPORT_REG) {
-    DPRINTF("mdnet W reg=%02x data=%02x\n", reg, data);
-  }
-
-  // A command-register write may arm a remote-DMA read (prep the stream)
-  // or a transmit (handled in the bridge poll). Everything else just
-  // updates state we re-stage below.
-  if (reg == 0x00u && (data & CR_RREAD)) {
-    prepare_read_stream();
-  }
-}
-
-static void bridge_poll(void) {
-  // TX: hand any queued frame to the WiFi side. Data-port writes captured
-  // above already filled the tx page; take_tx yields the staged frame.
-  // Because STinG uses the Pico's own STA MAC, the frame goes out on WiFi
-  // with the right source address -- no rewrite needed.
-  static uint8_t txbuf[NE2000_MTU];
-  uint16_t txlen = ne2000_take_tx(&s_chip, txbuf);
-  if (txlen > 0) {
-    int err = cyw43_send_ethernet(&cyw43_state, CYW43_ITF_STA, txlen, txbuf,
-                                  false);
-    if (err != 0) {
-      DPRINTF("mdnet TX %u bytes failed: %d\n", (unsigned)txlen, err);
+  if (reg == 0x00u) {
+    // A command write may change the page (so register reads mean
+    // something different now) or arm a remote-DMA read. Restage
+    // immediately so the driver's very next read sees the right value.
+    if (data & CR_RREAD) {
+      prepare_read_stream();
     }
+    restage_registers();
   }
-  // RX runs from the netif input tap (mdnet_netif_input), not here.
 }
 
-// RX tap: every Ethernet frame the CYW43 receives passes through the STA
-// netif's input function. We copy it into the NE2000 rx ring (deliver_rx
-// sets ISR_RX, which restage_registers() surfaces to the polling driver),
-// then chain to lwIP's original input so the Pico's own stack keeps
-// working. Frames arrive here already addressed to our shared MAC (plus
-// broadcast/multicast), so no promiscuous mode is needed.
+// Core 1: the NE2000 servicing loop. The data port and the command bus are
+// never busy at the same instant (the driver either writes registers or
+// reads the data port), so a single non-blocking loop keeps both
+// responsive.
+static void __not_in_flash_func(mdnet_core1_loop)(void) {
+  static uint8_t rxbuf[FRM_CAP];
+  static uint8_t txbuf[NE2000_MTU];
+  for (;;) {
+    dataport_service();               // serve data-port reads
+    commemul_poll(on_rom3_sample);    // register + TX-byte writes
+    uint16_t n;
+    while ((n = rxq_pop(rxbuf)) > 0) {  // deliver received frames
+      if (ne2000_deliver_rx(&s_chip, rxbuf, n)) {
+        s_rxDelivered++;
+      } else {
+        s_rxDropped++;
+      }
+    }
+    uint16_t t = ne2000_take_tx(&s_chip, txbuf);  // hand off transmit frames
+    if (t > 0) {
+      if (txq_push(txbuf, t)) {
+        s_txSent++;
+      } else {
+        s_txDropped++;
+      }
+    }
+    restage_registers();              // reflect ISR/CURR changes
+  }
+}
+
+// RX tap (Core 0): every frame the CYW43 receives passes through the STA
+// netif input. Queue it for Core 1, then chain to lwIP so the Pico's own
+// stack keeps working. Frames arrive already addressed to our shared MAC
+// (+ broadcast/multicast), so no promiscuous mode is needed.
 static netif_input_fn s_orig_input = NULL;
 
 static err_t mdnet_netif_input(struct pbuf *p, struct netif *inp) {
@@ -138,7 +211,9 @@ static err_t mdnet_netif_input(struct pbuf *p, struct netif *inp) {
   if (s_active && len >= 14u && len <= NE2000_MTU) {
     static uint8_t rxbuf[NE2000_MTU];
     pbuf_copy_partial(p, rxbuf, len, 0);
-    ne2000_deliver_rx(&s_chip, rxbuf, len);
+    if (!rxq_push(rxbuf, len)) {
+      s_rxDropped++;
+    }
   }
   if (s_orig_input != NULL) {
     return s_orig_input(p, inp);
@@ -162,41 +237,46 @@ void mdnet_init(void) {
     DPRINTF("mdnet: cyw43 MAC unavailable, using fallback\n");
   }
   ne2000_reset(&s_chip, mac);
-  dataport_init();  // ROM4 tap + Core 1 data-port servicer
-  install_rx_tap();  // intercept WiFi RX frames into the NE2000 ring
+  dataport_init();   // ROM4 tap (PIO only; serviced from Core 1 below)
+  install_rx_tap();  // intercept WiFi RX frames into the rx queue
   DPRINTF("mdnet: NE2000 model ready, MAC %02x:%02x:%02x:%02x:%02x:%02x\n",
           mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 }
 
 void mdnet_activate(void) {
-  // Zero the register-read window and stage the reset-state register file.
-  // (The full boot-cartridge -> register-map repaint and the warm-reset
-  // restore of the cartridge magic are hardware-bring-up items; for now we
-  // just switch our staging on so the ST reads live register values.)
   restage_registers();
-  // Pre-arm the MAC PROM so the probe's first data-port read (the 32-byte
-  // station-address read) is served immediately, without waiting for the
-  // Core-0 poll loop to see the CR-RREAD command.
+  // Pre-arm the MAC PROM (Core 0, before Core 1 launch) so the probe's
+  // first data-port read is served immediately.
   dataport_arm(s_chip.prom, NE2000_PROM_SIZE);
   s_active = true;
-  DPRINTF("mdnet: register map active\n");
+  __sync_synchronize();
+  multicore_launch_core1(mdnet_core1_loop);
+  DPRINTF("mdnet: Core 1 servicing started; register map active\n");
 }
 
 void mdnet_poll(void) {
   if (!s_active) {
     return;
   }
-  commemul_poll(on_rom3_sample);
-  bridge_poll();
-  restage_registers();
+  // TX drain: send frames Core 1 queued from the NE2000 tx page.
+  static uint8_t txbuf[FRM_CAP];
+  uint16_t t;
+  while ((t = txq_pop(txbuf)) > 0) {
+    int err = cyw43_send_ethernet(&cyw43_state, CYW43_ITF_STA, t, txbuf, false);
+    if (err != 0) {
+      DPRINTF("mdnet TX %u bytes failed: %d\n", (unsigned)t, err);
+    }
+  }
 
-  // Report the data-port read count occasionally so the ROM4 tap can be
-  // confirmed on hardware (it should climb by ~32 each time the driver
-  // reads the MAC PROM).
-  static uint32_t last = 0;
-  uint32_t now = dataport_readCount();
-  if (now != last) {
-    DPRINTF("mdnet: data-port reads=%lu\n", (unsigned long)now);
-    last = now;
+  // Periodic stats so the bridge can be watched on hardware.
+  static uint32_t lastDp = 0, lastRx = 0, lastTx = 0;
+  uint32_t dp = dataport_readCount(), rx = s_rxDelivered, tx = s_txSent;
+  if (dp != lastDp || rx != lastRx || tx != lastTx) {
+    DPRINTF("mdnet: dp-reads=%lu rx=%lu(drop %lu) tx=%lu(drop %lu)\n",
+            (unsigned long)dp, (unsigned long)rx, (unsigned long)s_rxDropped,
+            (unsigned long)tx, (unsigned long)s_txDropped);
+    lastDp = dp;
+    lastRx = rx;
+    lastTx = tx;
   }
 }

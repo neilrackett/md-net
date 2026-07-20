@@ -20,14 +20,19 @@
 
 #include <stdint.h>
 
-// Start the data-port serve: claim a PIO SM for the ROM4 tap and launch
-// Core 1 to service it. Call once, after romemul is up.
+// Claim a PIO SM for the read-only ROM4 tap. Call once, after romemul is
+// up. Does not launch Core 1 -- the mdnet servicing loop drives
+// dataport_service() from Core 1.
 void dataport_init(void);
+
+// Drain the ROM4 tap FIFO and advance the data-port stream one byte per
+// data-port read. Call from the Core-1 servicing loop.
+void dataport_service(void);
 
 // Arm a remote-DMA read: `stream[0..len)` is the byte sequence the ST will
 // read out of the data port next. Copies the stream, preloads the first
-// byte into the served RAM slots, and resets the advance pointer. Safe to
-// call from Core 0 between transfers.
+// byte into the served RAM slots, and resets the advance pointer. Called
+// from Core 1 (or Core 0 before Core 1 launch, for the PROM pre-arm).
 void dataport_arm(const uint8_t *stream, uint16_t len);
 
 // Diagnostics: total data-port reads Core 1 has observed since boot (used

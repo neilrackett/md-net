@@ -1,14 +1,19 @@
 /**
  * File: dataport.c
- * Description: NE2000 remote-DMA data-port serve on Core 1. See dataport.h
- *              and docs/ne2000-emulation.md.
+ * Description: NE2000 remote-DMA data-port serve. See dataport.h and
+ *              docs/ne2000-emulation.md.
  *
  * A read-only PIO tap (dataport.pio) autopushes every ROM4 read address.
- * Core 1 blocks on that FIFO; for each read whose register field is the
- * data port ($10) it advances a pre-staged byte stream into the data-port
- * RAM slots, so the NEXT read served by romemul returns the next byte.
- * Core 1 touches only RAM + PIO (never flash), so it is safe alongside
- * Core 0's flash-owning role.
+ * dataport_service() drains that FIFO non-blockingly; for each read whose
+ * register field is the data port ($10) it advances a pre-staged byte
+ * stream into the data-port RAM slots, so the NEXT read served by romemul
+ * returns the next byte. It is called from the mdnet Core-1 servicing loop
+ * (which also drains the command bus and restages registers), so all
+ * NE2000 bus servicing lives on one core with microsecond latency.
+ *
+ * dataport_arm() and dataport_service() are both called from Core 1, so
+ * the stream state needs no cross-core synchronisation. The one exception
+ * is the pre-arm of the MAC PROM, done on Core 0 before Core 1 is launched.
  */
 
 #include "dataport.h"
@@ -18,8 +23,6 @@
 #include "debug.h"
 #include "hardware/pio.h"
 #include "ne2000.h"
-#include "pico/multicore.h"
-#include "pico/platform.h"
 
 // Data-port serve slots: the high byte of the ROM4 words the driver reads
 // for the data port ($FA2000/2/4/6). A byte read at an even ST address
@@ -37,10 +40,11 @@
 static PIO s_pio = pio1;
 static int s_sm = -1;
 
-// Shared serve state. Core 0 writes on arm; Core 1 reads/advances.
+// Stream state. Touched only by Core 1 (dataport_service + dataport_arm),
+// except the pre-launch PROM pre-arm on Core 0.
 static uint8_t s_stream[NE2000_MTU + 32];
-static volatile uint16_t s_len = 0;
-static volatile uint16_t s_idx = 0;
+static uint16_t s_len = 0;
+static uint16_t s_idx = 0;
 static volatile uint32_t s_count = 0;
 
 static inline volatile uint8_t *rom4(void) {
@@ -55,20 +59,17 @@ static inline void write_slots(uint8_t b) {
   r[DP_SLOT3] = b;
 }
 
-// Core 1: block on the ROM4 tap and advance the data-port stream one byte
-// per data-port read.
-static void __not_in_flash_func(dataport_core1_loop)(void) {
-  for (;;) {
-    uint32_t word = pio_sm_get_blocking(s_pio, (uint)s_sm);
+void dataport_service(void) {
+  while (!pio_sm_is_rx_fifo_empty(s_pio, (uint)s_sm)) {
+    uint32_t word = pio_sm_get(s_pio, (uint)s_sm);
     uint16_t addr = (uint16_t)(word >> 16);
     if (((addr >> 9) & 0x1Fu) != DP_REG) {
       continue;
     }
     s_count++;
-    uint16_t i = s_idx;
-    if (i < s_len) {
-      write_slots(s_stream[i]);
-      s_idx = (uint16_t)(i + 1u);
+    if (s_idx < s_len) {
+      write_slots(s_stream[s_idx]);
+      s_idx = (uint16_t)(s_idx + 1u);
     }
   }
 }
@@ -77,14 +78,11 @@ void dataport_arm(const uint8_t *stream, uint16_t len) {
   if (len > sizeof(s_stream)) {
     len = sizeof(s_stream);
   }
-  s_len = 0;  // freeze the advance while we restage
-  __sync_synchronize();
   for (uint16_t i = 0; i < len; i++) {
     s_stream[i] = stream[i];
   }
   write_slots(len > 0 ? stream[0] : 0u);  // preload the first byte
   s_idx = 1u;
-  __sync_synchronize();
   s_len = len;
 }
 
@@ -99,10 +97,7 @@ void dataport_init(void) {
                              READ_ADDR_GPIO_BASE, READ_ADDR_PIN_COUNT,
                              SAMPLE_DIV_FREQ);
   pio_sm_set_enabled(s_pio, (uint)s_sm, true);
-
-  multicore_launch_core1(dataport_core1_loop);
-  DPRINTF("dataport: ROM4 tap on pio1/sm%d, Core 1 servicing data port\n",
-          s_sm);
+  DPRINTF("dataport: ROM4 tap on pio1/sm%d\n", s_sm);
 }
 
 uint32_t dataport_readCount(void) { return s_count; }
