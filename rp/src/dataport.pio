@@ -1,0 +1,45 @@
+; RP2040 PIO program: read-only tap on ROM4 reads, used to drive the
+; NE2000 remote-DMA data-port serve. It samples the address of every ROM4
+; read and autopushes it to the RX FIFO; Core 1 decodes the register field
+; and advances the data-port byte stream. It NEVER drives the bus (no
+; side-set of READ/WRITE), so it cannot contend with romemul, which owns
+; the ROM4 data path -- this SM just piggybacks on romemul's READ enable to
+; sample the latched address.
+;
+; Structure mirrors commemul_read (same proven sampling timing) minus the
+; side-set. Same in-shift config as commemul: the address lands in the
+; upper halfword of the 32-bit FIFO word, bit i = address line A_i.
+
+.define public DATAPORT_ROM4_GPIO 22
+.define public DATAPORT_BUS_PINS 16
+.define public DATAPORT_SAFE_WAIT 3
+
+.program dataport_read
+
+.wrap_target
+    wait 0 gpio DATAPORT_ROM4_GPIO             ; ROM4 asserted (active low)
+    nop                              [DATAPORT_SAFE_WAIT]
+    nop                              [DATAPORT_SAFE_WAIT]
+    nop                              [DATAPORT_SAFE_WAIT]
+    in pins, DATAPORT_BUS_PINS                 ; autopush the address to RX FIFO
+    wait 1 gpio DATAPORT_ROM4_GPIO             ; wait for the cycle to end
+.wrap
+
+% c-sdk {
+
+static inline void dataport_read_program_init(PIO pio, uint sm, uint offset,
+                                              uint addr_pin_base,
+                                              uint addr_pin_count, float div) {
+    pio_sm_config c = dataport_read_program_get_default_config(offset);
+
+    sm_config_set_in_pins(&c, addr_pin_base);
+    // Shift right + autopush at the full bus width, exactly like
+    // commemul_read: the sampled address ends up in the upper 16 bits of
+    // the pushed word with A_i at bit i.
+    sm_config_set_in_shift(&c, true, true, addr_pin_count);
+    sm_config_set_clkdiv(&c, div);
+
+    pio_sm_init(pio, sm, offset, &c);
+}
+
+%}

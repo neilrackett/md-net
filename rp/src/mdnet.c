@@ -21,6 +21,7 @@
 #include "cart_shared.h"
 #include "commemul.h"
 #include "constants.h"
+#include "dataport.h"
 #include "debug.h"
 #include "ne2000.h"
 #include "network.h"
@@ -80,6 +81,9 @@ static void prepare_read_stream(void) {
   // Rewind: the stream is a preview; the ST's own reads must reproduce it.
   s_chip.rsar = rsar;
   s_chip.rcnt = rcnt;
+
+  // Hand the stream to Core 1 to serve as the ST reads the data port.
+  dataport_arm(s_readStream, s_readStreamLen);
 }
 
 // commemul callback: one ROM3 sample == one EtherNEC register/data write.
@@ -127,6 +131,7 @@ void mdnet_init(void) {
     DPRINTF("mdnet: cyw43 MAC unavailable, using fallback\n");
   }
   ne2000_reset(&s_chip, mac);
+  dataport_init();  // ROM4 tap + Core 1 data-port servicer
   DPRINTF("mdnet: NE2000 model ready, MAC %02x:%02x:%02x:%02x:%02x:%02x\n",
           mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 }
@@ -137,6 +142,10 @@ void mdnet_activate(void) {
   // restore of the cartridge magic are hardware-bring-up items; for now we
   // just switch our staging on so the ST reads live register values.)
   restage_registers();
+  // Pre-arm the MAC PROM so the probe's first data-port read (the 32-byte
+  // station-address read) is served immediately, without waiting for the
+  // Core-0 poll loop to see the CR-RREAD command.
+  dataport_arm(s_chip.prom, NE2000_PROM_SIZE);
   s_active = true;
   DPRINTF("mdnet: register map active\n");
 }
@@ -148,4 +157,14 @@ void mdnet_poll(void) {
   commemul_poll(on_rom3_sample);
   bridge_poll();
   restage_registers();
+
+  // Report the data-port read count occasionally so the ROM4 tap can be
+  // confirmed on hardware (it should climb by ~32 each time the driver
+  // reads the MAC PROM).
+  static uint32_t last = 0;
+  uint32_t now = dataport_readCount();
+  if (now != last) {
+    DPRINTF("mdnet: data-port reads=%lu\n", (unsigned long)now);
+    last = now;
+  }
 }

@@ -66,7 +66,49 @@ This maps directly onto the existing bus emulation:
   register value, the next m68k read returns it. Register reads are
   therefore *servable by staging RAM* — with two caveats below.
 
-## Open problem 1 — the data port has no static-RAM answer
+## Data-port serve — the Core 1 approach (implemented, iteration 1)
+
+**Update:** on-hardware validation confirmed the register write/read paths
+work (STinG runs its full probe + init; see the register log). The data
+port is now served by a dedicated Core 1 path (`rp/src/dataport.{c,pio}`).
+
+The key realisation that makes this simple: a **single stream pointer,
+advanced one byte per data-port read, serves both access patterns** the
+driver uses. The probe reads the data port as repeated byte reads at the
+same address `$FA2000`; packet DMA (`movep.l`) steps across
+`$FA2000/2/4/6`. In both cases each successive read just wants the *next*
+byte — so "advance one byte per read" is correct regardless of which
+address the read lands on, as long as every data-port word slot holds the
+current byte.
+
+Mechanism:
+- `dataport.pio` is a **read-only** ROM4 tap (no side-set, so it can't
+  contend with romemul). It autopushes the address of every ROM4 read.
+- **Core 1** blocks on that FIFO. For each read whose register field
+  (`(addr >> 9) & 0x1F`) equals `$10`, it advances the stream: writes the
+  next byte into the four data-port RAM slots (`$2001/$2003/$2005/$2007`,
+  the byte-swapped high bytes of `$2000/2/4/6`). Doing the decode in C on a
+  dedicated core keeps the PIO trivial and the logic testable, and Core 1
+  touches only RAM + PIO so it stays clear of Core 0's flash ownership.
+- The register-field decode in C gives **precise gating**: reg `$1f`
+  (reset) reads are ignored, so they don't spuriously advance the stream.
+- **Arming**: the MAC PROM is pre-armed at `mdnet_activate()` so the
+  probe's first data-port read is served without waiting for the Core-0
+  poll loop to see the arming command. Subsequent transfers re-arm via
+  `prepare_read_stream()` on each `CR=RREAD`.
+
+Ordering: the stream is preloaded with byte 0, index starts at 1, and the
+tap fires at ROM4 deassert (after romemul has already served the current
+byte), so each advance stages the byte for the *next* read.
+
+Known iteration-1 limits to check on hardware: whether Core 1 keeps up with
+back-to-back `movep` reads (packet RX), and whether the Core-0 re-arm
+latency needs the whole register loop moved to Core 1 for packet transfers.
+The MAC-PROM probe read is slow (~1.5 µs/read) and pre-armed, so it's the
+first thing to light up: success = the `reg=01..06` MAC writes show the
+Pico's real MAC instead of `00`.
+
+## Open problem 1 (original analysis) — the data port has no static-RAM answer
 
 Remote-DMA moves packet bytes through the data port `NE_DATAPORT=$10`,
 i.e. address `$FA2000`. Crucially **every** data-port access is the *same*
