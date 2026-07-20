@@ -324,23 +324,16 @@ void mdnet_poll(void) {
   static uint8_t txbuf[FRM_CAP];
   uint16_t t;
   while ((t = txq_pop(txbuf)) > 0) {
-    // Diagnostic: identify what the driver is transmitting. ARP op 2 = a
-    // reply (what a pinged host must send); op 1 = its own request. For IP,
-    // proto 1 = ICMP (the echo reply). Not rate-limited -- TX is low-rate.
-    if (t >= 42u && txbuf[12] == 0x08u && txbuf[13] == 0x06u) {
-      DPRINTF("mdnet: TX ARP op=%u sndr=%u.%u.%u.%u tgt=%u.%u.%u.%u "
-              "smac=%02x:%02x:%02x:%02x:%02x:%02x\n",
-              txbuf[21], txbuf[28], txbuf[29], txbuf[30], txbuf[31], txbuf[38],
-              txbuf[39], txbuf[40], txbuf[41], txbuf[22], txbuf[23], txbuf[24],
-              txbuf[25], txbuf[26], txbuf[27]);
-    } else if (t >= 34u && txbuf[12] == 0x08u && txbuf[13] == 0x00u) {
-      DPRINTF("mdnet: TX IP proto=%u %u.%u.%u.%u -> %u.%u.%u.%u\n", txbuf[23],
-              txbuf[26], txbuf[27], txbuf[28], txbuf[29], txbuf[30], txbuf[31],
-              txbuf[32], txbuf[33]);
-    } else {
-      DPRINTF("mdnet: TX %u bytes ethertype=%02x%02x\n", (unsigned)t, txbuf[12],
-              txbuf[13]);
-    }
+    // Diagnostic: dump the first 20 bytes of the outbound frame so we can
+    // see the exact layout (dst MAC / src MAC / ethertype at 12-13). The
+    // ethertype came out 0000, so the frame is mis-assembled somewhere in
+    // the TX-page read-back -- the raw bytes reveal shift vs swap vs zero.
+    DPRINTF("mdnet: TX len=%u [%02x %02x %02x %02x %02x %02x | %02x %02x %02x "
+            "%02x %02x %02x | %02x %02x | %02x %02x %02x %02x %02x %02x]\n",
+            (unsigned)t, txbuf[0], txbuf[1], txbuf[2], txbuf[3], txbuf[4],
+            txbuf[5], txbuf[6], txbuf[7], txbuf[8], txbuf[9], txbuf[10],
+            txbuf[11], txbuf[12], txbuf[13], txbuf[14], txbuf[15], txbuf[16],
+            txbuf[17], txbuf[18], txbuf[19]);
     int err = cyw43_send_ethernet(&cyw43_state, CYW43_ITF_STA, t, txbuf, false);
     if (err != 0) {
       DPRINTF("mdnet TX %u bytes failed: %d\n", (unsigned)t, err);
