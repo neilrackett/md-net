@@ -41,11 +41,6 @@ static PIO s_pio = pio1;
 static int s_sm = -1;
 static int s_crSm = -1;  // ROM3 command-register tap
 
-// Stream state. Touched only by Core 1 (dataport_service + dataport_arm),
-// except the pre-launch PROM pre-arm on Core 0.
-static uint8_t s_stream[NE2000_MTU + 32];
-static uint16_t s_len = 0;
-static uint16_t s_idx = 0;
 static volatile uint32_t s_count = 0;
 
 static inline volatile uint8_t *rom4(void) {
@@ -60,7 +55,9 @@ static inline void write_slots(uint8_t b) {
   r[DP_SLOT3] = b;
 }
 
-void dataport_service(void) {
+void dataport_set_byte(uint8_t b) { write_slots(b); }
+
+void dataport_service(uint8_t (*next_byte)(void)) {
   while (!pio_sm_is_rx_fifo_empty(s_pio, (uint)s_sm)) {
     uint32_t word = pio_sm_get(s_pio, (uint)s_sm);
     uint16_t addr = (uint16_t)(word >> 16);
@@ -68,23 +65,10 @@ void dataport_service(void) {
       continue;
     }
     s_count++;
-    if (s_idx < s_len) {
-      write_slots(s_stream[s_idx]);
-      s_idx = (uint16_t)(s_idx + 1u);
-    }
+    // A data-port read just consumed the served byte; stage the next one so
+    // the ST's next read gets it.
+    write_slots(next_byte());
   }
-}
-
-void dataport_arm(const uint8_t *stream, uint16_t len) {
-  if (len > sizeof(s_stream)) {
-    len = sizeof(s_stream);
-  }
-  for (uint16_t i = 0; i < len; i++) {
-    s_stream[i] = stream[i];
-  }
-  write_slots(len > 0 ? stream[0] : 0u);  // preload the first byte
-  s_idx = 1u;
-  s_len = len;
 }
 
 void dataport_init(void) {

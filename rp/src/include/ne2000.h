@@ -98,11 +98,12 @@ bool ne2000_deliver_rx(ne2000_t *chip, const uint8_t *frame, uint16_t len);
 // length; otherwise return 0. Clears the pending-tx latch.
 uint16_t ne2000_take_tx(ne2000_t *chip, uint8_t *out);
 
-// Non-mutating read of up to `maxlen` bytes from the remote-DMA address
-// space (PROM + rx ring, with ring wrap) starting at `rsar`, into `out`.
-// Returns the number of bytes copied. Used to pre-build a data-port read
-// stream without disturbing chip state.
-uint16_t ne2000_peek_dma(const ne2000_t *chip, uint16_t rsar, uint16_t rcnt,
-                         uint8_t *out, uint16_t maxlen);
+// Data-port serve cursor: the byte at the current remote-DMA address
+// (RSAR), and a step to the next byte (advances RSAR with rx-ring wrap,
+// decrements RCNT, sets ISR_RDC at count 0). Used to serve the data port
+// directly from live chip state, so RSAR set-up by the driver (via the
+// register path) is honoured without a separately-armed stream.
+uint8_t ne2000_dma_current(const ne2000_t *chip);
+void ne2000_dma_advance(ne2000_t *chip);
 
 #endif  // NE2000_H

@@ -101,11 +101,12 @@ void emul_start() {
     DPRINTF("SD card unavailable. Continuing without SD.\n");
   }
 
-  // Cartridge SELECT button -- polled in the idle loop below. Short
-  // press reboots the device; long press jumps to the Booster app.
+  // Cartridge SELECT button. Reset actions are intentionally NOT wired:
+  // spurious edges were firing a "long press" and jumping to Booster,
+  // killing MD/Net mid-session. Configure the pin but leave the callbacks
+  // unset so a stray edge does nothing. (Power-cycle to reset; hold SELECT
+  // at power-on still reaches Booster via main.c's early check.)
   select_configure();
-  select_setResetCallback(reset_device);
-  select_setLongResetCallback(reset_jump_to_booster);
 
   // Join the WiFi network in STA mode. Credentials and network
   // parameters come read-only from the Booster global config

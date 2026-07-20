@@ -47,9 +47,6 @@ static volatile bool s_active = false;
 // with the right meaning before the driver reads it.
 static uint8_t s_curpage = 0;
 
-// Stream scratch for building a data-port read (Core 1 only).
-static uint8_t s_readStream[NE2000_MTU + 32];
-
 // Cross-core SPSC frame queues. rx: Core 0 (WiFi) -> Core 1 (ring);
 // tx: Core 1 (ring) -> Core 0 (WiFi). head is written only by the
 // producer, tail only by the consumer.
@@ -150,60 +147,32 @@ static uint8_t reg7_value(void) {
   return (s_curpage == 1u) ? s_chip.curr : s_chip.isr;
 }
 
-// Shadow RSAR/RCNT tracked from the fast CR tap, so a remote-DMA read is
-// armed with the right address the instant CR=RREAD is seen -- the
-// commemul-driven arm was too slow, so the driver's first data-port read
-// (the packet-header status byte) got a stale byte and header validation
-// failed, so it never read packet bodies.
-static uint16_t s_shadowRsar = 0, s_shadowRcnt = 0;
-
-// Build + arm the data-port read stream from the shadow RSAR/RCNT.
-static void arm_read_stream(void) {
-  uint16_t n = ne2000_peek_dma(&s_chip, s_shadowRsar, s_shadowRcnt,
-                               s_readStream, (uint16_t)sizeof(s_readStream));
-  dataport_arm(s_readStream, n);
-
-  s_dbgRsar = s_shadowRsar;
-  s_dbgRcnt = n;
-  for (int i = 0; i < 4; i++) {
-    s_dbgB[i] = (i < n) ? s_readStream[i] : 0u;
-  }
-  s_dbgRreadSeq++;
+// The data port serves the chip's live remote-DMA byte. next_byte (called
+// by dataport_service after each data-port read) steps to the next byte;
+// the loop also refreshes the served byte each iteration so an RSAR change
+// from the register path is reflected before the ST reads.
+static uint8_t mdnet_dp_next(void) {
+  ne2000_dma_advance(&s_chip);
+  return ne2000_dma_current(&s_chip);
 }
 
-// Drain the low-latency ROM3 CR tap. It sees every register/data write in
-// order with minimal latency (direct FIFO), so it owns the two things that
-// must beat the driver's next read: the register-7 page flip, and arming a
-// remote-DMA read (shadowing RSAR/RCNT/CR).
+// Drain the low-latency ROM3 CR tap: for each command-register write, track
+// the selected page and flip register 7 immediately. This is the fast path
+// that beats the driver's page-select -> CURR-read window (the commemul DMA
+// ring was too slow, leaving register 7 stale).
 static void crtap_service(void) {
   uint16_t addr;
   while (dataport_crtap_get(&addr)) {
-    uint8_t reg = mdnet_sample_reg(addr);
-    uint8_t data = mdnet_sample_data(addr);
-    switch (reg) {
-      case 0x08u:  // RSARLO
-        s_shadowRsar = (uint16_t)((s_shadowRsar & 0xFF00u) | data);
-        break;
-      case 0x09u:  // RSARHI
-        s_shadowRsar =
-            (uint16_t)((s_shadowRsar & 0x00FFu) | ((uint16_t)data << 8));
-        break;
-      case 0x0Au:  // RCNTLO
-        s_shadowRcnt = (uint16_t)((s_shadowRcnt & 0xFF00u) | data);
-        break;
-      case 0x0Bu:  // RCNTHI
-        s_shadowRcnt =
-            (uint16_t)((s_shadowRcnt & 0x00FFu) | ((uint16_t)data << 8));
-        break;
-      case 0x00u:  // command register
-        s_curpage = (uint8_t)((data >> 6) & 0x03u);
-        rom4_bytes()[MDNET_REG_READ_OFFSET(0x07u)] = reg7_value();
-        if (data & CR_RREAD) {
-          arm_read_stream();
-        }
-        break;
-      default:
-        break;
+    if (mdnet_sample_reg(addr) == 0x00u) {  // command-register write
+      uint8_t cr = mdnet_sample_data(addr);
+      s_curpage = (uint8_t)((cr >> 6) & 0x03u);
+      rom4_bytes()[MDNET_REG_READ_OFFSET(0x07u)] = reg7_value();
+      if (cr & CR_RREAD) {  // remote-DMA read armed: sample what we'll serve
+        s_dbgRsar = s_chip.rsar;
+        s_dbgRcnt = s_chip.rcnt;
+        s_dbgB[0] = ne2000_dma_current(&s_chip);
+        s_dbgRreadSeq++;
+      }
     }
   }
 }
@@ -243,9 +212,10 @@ static void __not_in_flash_func(mdnet_core1_loop)(void) {
     // command-bus drain (chip state), the data-port serve, and the fast
     // register restage.
     crtap_service();
-    commemul_poll(on_rom3_sample);    // register + TX-byte writes
-    dataport_service();               // serve data-port reads
-    stage_hot();                      // fast restage of the polled registers
+    commemul_poll(on_rom3_sample);         // register + TX-byte writes
+    dataport_service(mdnet_dp_next);       // advance the served byte per read
+    dataport_set_byte(ne2000_dma_current(&s_chip));  // serve the live byte
+    stage_hot();                           // fast restage of the polled registers
 
     // Deliver at most ONE queued frame per iteration, then service the
     // taps again right away.
@@ -258,7 +228,8 @@ static void __not_in_flash_func(mdnet_core1_loop)(void) {
       }
       crtap_service();
       commemul_poll(on_rom3_sample);
-      dataport_service();
+      dataport_service(mdnet_dp_next);
+      dataport_set_byte(ne2000_dma_current(&s_chip));
     }
 
     uint16_t t = ne2000_take_tx(&s_chip, txbuf);  // hand off transmit frames
@@ -317,9 +288,8 @@ void mdnet_init(void) {
 
 void mdnet_activate(void) {
   restage_registers();
-  // Pre-arm the MAC PROM (Core 0, before Core 1 launch) so the probe's
-  // first data-port read is served immediately.
-  dataport_arm(s_chip.prom, NE2000_PROM_SIZE);
+  // The data port now serves the chip's live remote-DMA byte, so the MAC
+  // PROM read (RSAR=0) is served straight from chip->prom -- no pre-arm.
   s_active = true;
   __sync_synchronize();
   multicore_launch_core1(mdnet_core1_loop);
@@ -352,16 +322,15 @@ void mdnet_poll(void) {
     lastTx = tx;
   }
 
-  // Sample the most recent remote-DMA read the driver armed: rcnt=4 is a
-  // packet header (b[0]=status should be 01, b[1]=next page ~$47..$60),
-  // rcnt=2 the ethertype, larger is a body. Shows whether the driver reads
-  // sane headers from the right page.
+  // Sample the most recent remote-DMA read the driver armed. rcnt=4 is a
+  // packet header and b0 is its status byte -- should be 01 (RXOK) and the
+  // rsar should be a real ring page ($47..$60). rcnt=32 from rsar=0000 is
+  // the MAC PROM (b0 = first MAC byte).
   static uint32_t lastRread = 0;
   uint32_t rr = s_dbgRreadSeq;
   if (rr != lastRread) {
-    DPRINTF("mdnet: RREAD rsar=%04x rcnt=%u [%02x %02x %02x %02x]\n",
-            (unsigned)s_dbgRsar, (unsigned)s_dbgRcnt, s_dbgB[0], s_dbgB[1],
-            s_dbgB[2], s_dbgB[3]);
+    DPRINTF("mdnet: RREAD rsar=%04x rcnt=%u b0=%02x\n", (unsigned)s_dbgRsar,
+            (unsigned)s_dbgRcnt, s_dbgB[0]);
     lastRread = rr;
   }
 }

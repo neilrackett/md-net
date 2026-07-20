@@ -25,21 +25,21 @@
 // dataport_service() from Core 1.
 void dataport_init(void);
 
-// Drain the ROM4 tap FIFO and advance the data-port stream one byte per
-// data-port read. Call from the Core-1 servicing loop.
-void dataport_service(void);
+// Set the byte the data port currently serves (written to all four
+// data-port RAM slots). Call each Core-1 iteration with the chip's current
+// remote-DMA byte so RSAR changes are reflected before the ST reads.
+void dataport_set_byte(uint8_t b);
+
+// Drain the ROM4 tap FIFO; for each data-port read that occurred, call
+// next_byte() and serve its result (so the ST's following read gets the
+// next byte). Call from the Core-1 servicing loop.
+void dataport_service(uint8_t (*next_byte)(void));
 
 // Non-blocking read of the low-latency ROM3 command-register tap. Returns 1
 // and stores the 16-bit ROM3 address (of a register/data write) in *addr,
 // or 0 if the FIFO is empty. Used to track the driver's selected page with
 // far lower latency than the commemul DMA ring.
 int dataport_crtap_get(uint16_t *addr);
-
-// Arm a remote-DMA read: `stream[0..len)` is the byte sequence the ST will
-// read out of the data port next. Copies the stream, preloads the first
-// byte into the served RAM slots, and resets the advance pointer. Called
-// from Core 1 (or Core 0 before Core 1 launch, for the PROM pre-arm).
-void dataport_arm(const uint8_t *stream, uint16_t len);
 
 // Diagnostics: total data-port reads Core 1 has observed since boot (used
 // to confirm the tap is detecting reads on hardware).
