@@ -69,6 +69,7 @@ static struct {
 // Diagnostics (Core 1 writes, Core 0 logs).
 static volatile uint32_t s_rxDelivered = 0, s_rxDropped = 0;
 static volatile uint32_t s_txSent = 0, s_txDropped = 0;
+static volatile uint32_t s_txCmd = 0;  // CR=TRANS commands the driver issued
 // Last remote-DMA read the driver armed, for on-hardware visibility into
 // what it is reading (header vs body, from which page, and the first bytes
 // we serve).
@@ -195,8 +196,12 @@ static void stage_hot(void) {
 // flip and arming a remote-DMA read -- are handled by the faster CR tap
 // (crtap_service), not here.
 static void on_rom3_sample(uint16_t sample) {
-  ne2000_reg_write(&s_chip, mdnet_sample_reg(sample),
-                   mdnet_sample_data(sample));
+  uint8_t reg = mdnet_sample_reg(sample);
+  uint8_t data = mdnet_sample_data(sample);
+  ne2000_reg_write(&s_chip, reg, data);
+  if (reg == 0x00u && (data & CR_TRANS)) {
+    s_txCmd++;  // the driver asked the chip to transmit (e.g. an ARP reply)
+  }
 }
 
 // Core 1: the NE2000 servicing loop. The data port and the command bus are
@@ -314,9 +319,10 @@ void mdnet_poll(void) {
   static uint32_t lastDp = 0, lastRx = 0, lastTx = 0;
   uint32_t dp = dataport_readCount(), rx = s_rxDelivered, tx = s_txSent;
   if (dp != lastDp || rx != lastRx || tx != lastTx) {
-    DPRINTF("mdnet: dp-reads=%lu rx=%lu(drop %lu) tx=%lu(drop %lu)\n",
+    DPRINTF("mdnet: dp-reads=%lu rx=%lu(drop %lu) tx=%lu(cmd %lu drop %lu)\n",
             (unsigned long)dp, (unsigned long)rx, (unsigned long)s_rxDropped,
-            (unsigned long)tx, (unsigned long)s_txDropped);
+            (unsigned long)tx, (unsigned long)s_txCmd,
+            (unsigned long)s_txDropped);
     lastDp = dp;
     lastRx = rx;
     lastTx = tx;

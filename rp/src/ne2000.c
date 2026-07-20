@@ -230,15 +230,22 @@ uint8_t ne2000_reg_read(ne2000_t *chip, uint8_t reg) {
   }
 }
 
-// Copy n bytes into the ring at *off, wrapping at the ring end (at most one
-// split). src == NULL zero-fills. Advances *off. Using memcpy/memset here
-// (rather than a per-byte modulo loop) keeps delivery to a couple of
-// microseconds so it never blocks Core 1's register-staging for long.
+// Copy n bytes into the rx ring at *off, wrapping at the rx RING boundary
+// (pstart..pstop), NOT the full buffer -- this must match the serve's wrap
+// (dma_advance wraps RSAR at pstop -> pstart) or a packet that straddles
+// the ring top is written where the reader never looks. src == NULL
+// zero-fills. Advances *off. memcpy/memset (not a per-byte modulo loop)
+// keeps delivery to a couple of microseconds. mem[] is indexed from the
+// buffer's first page ($40), so the ring spans [low, high) in mem terms.
 static void ring_write(ne2000_t *chip, uint16_t *off, const uint8_t *src,
                        uint16_t n) {
+  uint16_t low =
+      (uint16_t)((chip->pstart - NE2000_RING_FIRST_PAGE) * NE2000_PAGE_SIZE);
+  uint16_t high =
+      (uint16_t)((chip->pstop - NE2000_RING_FIRST_PAGE) * NE2000_PAGE_SIZE);
   uint16_t o = *off;
   while (n > 0u) {
-    uint16_t chunk = (uint16_t)(NE2000_RING_BYTES - o);
+    uint16_t chunk = (uint16_t)(high - o);
     if (chunk > n) {
       chunk = n;
     }
@@ -248,7 +255,10 @@ static void ring_write(ne2000_t *chip, uint16_t *off, const uint8_t *src,
     } else {
       memset(&chip->mem[o], 0, chunk);
     }
-    o = (uint16_t)((o + chunk) % NE2000_RING_BYTES);
+    o = (uint16_t)(o + chunk);
+    if (o >= high) {
+      o = low;  // wrap at the rx ring end, matching dma_advance
+    }
     n = (uint16_t)(n - chunk);
   }
   *off = o;
