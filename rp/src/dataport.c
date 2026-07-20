@@ -39,6 +39,7 @@
 
 static PIO s_pio = pio1;
 static int s_sm = -1;
+static int s_crSm = -1;  // ROM3 command-register tap
 
 // Stream state. Touched only by Core 1 (dataport_service + dataport_arm),
 // except the pre-launch PROM pre-arm on Core 0.
@@ -97,7 +98,30 @@ void dataport_init(void) {
                              READ_ADDR_GPIO_BASE, READ_ADDR_PIN_COUNT,
                              SAMPLE_DIV_FREQ);
   pio_sm_set_enabled(s_pio, (uint)s_sm, true);
-  DPRINTF("dataport: ROM4 tap on pio1/sm%d\n", s_sm);
+
+  // Low-latency ROM3 tap for command-register writes (direct FIFO).
+  int crOffset = pio_add_program(s_pio, &crtap_read_program);
+  if (crOffset < 0) {
+    DPRINTF("dataport_init: crtap pio_add_program failed (%d)\n", crOffset);
+    return;
+  }
+  s_crSm = pio_claim_unused_sm(s_pio, true);
+  crtap_read_program_init(s_pio, (uint)s_crSm, (uint)crOffset,
+                          READ_ADDR_GPIO_BASE, READ_ADDR_PIN_COUNT,
+                          SAMPLE_DIV_FREQ);
+  pio_sm_set_enabled(s_pio, (uint)s_crSm, true);
+
+  DPRINTF("dataport: ROM4 tap pio1/sm%d, ROM3 CR tap pio1/sm%d\n", s_sm,
+          s_crSm);
+}
+
+int dataport_crtap_get(uint16_t *addr) {
+  if (s_crSm < 0 || pio_sm_is_rx_fifo_empty(s_pio, (uint)s_crSm)) {
+    return 0;
+  }
+  uint32_t word = pio_sm_get(s_pio, (uint)s_crSm);
+  *addr = (uint16_t)(word >> 16);
+  return 1;
 }
 
 uint32_t dataport_readCount(void) { return s_count; }

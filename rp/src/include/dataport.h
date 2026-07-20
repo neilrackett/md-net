@@ -29,6 +29,12 @@ void dataport_init(void);
 // data-port read. Call from the Core-1 servicing loop.
 void dataport_service(void);
 
+// Non-blocking read of the low-latency ROM3 command-register tap. Returns 1
+// and stores the 16-bit ROM3 address (of a register/data write) in *addr,
+// or 0 if the FIFO is empty. Used to track the driver's selected page with
+// far lower latency than the commemul DMA ring.
+int dataport_crtap_get(uint16_t *addr);
+
 // Arm a remote-DMA read: `stream[0..len)` is the byte sequence the ST will
 // read out of the data port next. Copies the stream, preloads the first
 // byte into the served RAM slots, and resets the advance pointer. Called

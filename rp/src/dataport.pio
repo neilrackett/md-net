@@ -11,6 +11,7 @@
 ; upper halfword of the 32-bit FIFO word, bit i = address line A_i.
 
 .define public DATAPORT_ROM4_GPIO 22
+.define public DATAPORT_ROM3_GPIO 26
 .define public DATAPORT_BUS_PINS 16
 .define public DATAPORT_SAFE_WAIT 3
 
@@ -23,6 +24,23 @@
     nop                              [DATAPORT_SAFE_WAIT]
     in pins, DATAPORT_BUS_PINS                 ; autopush the address to RX FIFO
     wait 1 gpio DATAPORT_ROM4_GPIO             ; wait for the cycle to end
+.wrap
+
+; Same read-only tap, but on ROM3 (register/data-port WRITES, which are
+; cartridge reads in the ROM3 window). Core 1 drains this FIFO directly to
+; detect command-register writes and flip register 7's page meaning with
+; minimal latency -- much faster than the commemul DMA ring, whose ~1us
+; latency loses the driver's page-select -> CURR-read race. Piggybacks on
+; commemul's READ enable; never drives the bus.
+.program crtap_read
+
+.wrap_target
+    wait 0 gpio DATAPORT_ROM3_GPIO             ; ROM3 asserted (active low)
+    nop                              [DATAPORT_SAFE_WAIT]
+    nop                              [DATAPORT_SAFE_WAIT]
+    nop                              [DATAPORT_SAFE_WAIT]
+    in pins, DATAPORT_BUS_PINS                 ; autopush the address to RX FIFO
+    wait 1 gpio DATAPORT_ROM3_GPIO             ; wait for the cycle to end
 .wrap
 
 % c-sdk {
@@ -39,6 +57,16 @@ static inline void dataport_read_program_init(PIO pio, uint sm, uint offset,
     sm_config_set_in_shift(&c, true, true, addr_pin_count);
     sm_config_set_clkdiv(&c, div);
 
+    pio_sm_init(pio, sm, offset, &c);
+}
+
+static inline void crtap_read_program_init(PIO pio, uint sm, uint offset,
+                                           uint addr_pin_base,
+                                           uint addr_pin_count, float div) {
+    pio_sm_config c = crtap_read_program_get_default_config(offset);
+    sm_config_set_in_pins(&c, addr_pin_base);
+    sm_config_set_in_shift(&c, true, true, addr_pin_count);
+    sm_config_set_clkdiv(&c, div);
     pio_sm_init(pio, sm, offset, &c);
 }
 

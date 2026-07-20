@@ -42,6 +42,10 @@
 
 static ne2000_t s_chip;
 static volatile bool s_active = false;
+// The driver's currently selected register page, tracked low-latency from
+// the ROM3 CR tap so register 7 (ISR in page 0, CURR in page 1) is staged
+// with the right meaning before the driver reads it.
+static uint8_t s_curpage = 0;
 
 // Stream scratch for building a data-port read (Core 1 only).
 static uint8_t s_readStream[NE2000_MTU + 32];
@@ -141,19 +145,36 @@ static void restage_registers(void) {
   }
 }
 
+// Register 7's value for the tracked page: ISR in page 0, CURR in page 1.
+static uint8_t reg7_value(void) {
+  return (s_curpage == 1u) ? s_chip.curr : s_chip.isr;
+}
+
+// Drain the low-latency ROM3 CR tap: for each command-register write, track
+// the selected page and flip register 7 immediately. This is the fast path
+// that beats the driver's page-select -> CURR-read window (the commemul DMA
+// ring was too slow, leaving register 7 stale ~50% of the time).
+static void crtap_service(void) {
+  uint16_t addr;
+  while (dataport_crtap_get(&addr)) {
+    if (mdnet_sample_reg(addr) == 0x00u) {  // command-register write
+      uint8_t cr = mdnet_sample_data(addr);
+      s_curpage = (uint8_t)((cr >> 6) & 0x03u);
+      rom4_bytes()[MDNET_REG_READ_OFFSET(0x07u)] = reg7_value();
+    }
+  }
+}
+
 // Fast restage of only the registers the driver polls in steady state.
-// Register 7 (ISR in page 0, CURR in page 1) is the hot one the receive
-// loop reads back-to-back; the others change rarely but are cheap. Run
-// every Core-1 iteration instead of the full 16-register restage so the
-// loop stays short enough to process the driver's page-select before its
-// next read (a full restage was a ~1us blind spot -- half the loop --
-// during which page-selects were missed and register 7 read stale).
+// Register 7 is served for the tracked page; BNRY/TSR/RSR are page-0
+// registers the driver reads directly. Runs every Core-1 iteration instead
+// of the full 16-register restage so the loop stays short.
 static void stage_hot(void) {
   volatile uint8_t *r = rom4_bytes();
-  r[MDNET_REG_READ_OFFSET(0x07u)] = ne2000_reg_read(&s_chip, 0x07u);  // ISR/CURR
-  r[MDNET_REG_READ_OFFSET(0x03u)] = ne2000_reg_read(&s_chip, 0x03u);  // BNRY
-  r[MDNET_REG_READ_OFFSET(0x04u)] = ne2000_reg_read(&s_chip, 0x04u);  // TSR
-  r[MDNET_REG_READ_OFFSET(0x0Cu)] = ne2000_reg_read(&s_chip, 0x0Cu);  // RSR
+  r[MDNET_REG_READ_OFFSET(0x07u)] = reg7_value();  // ISR (page 0) / CURR (page 1)
+  r[MDNET_REG_READ_OFFSET(0x03u)] = s_chip.bnry;   // BNRY
+  r[MDNET_REG_READ_OFFSET(0x04u)] = s_chip.tsr;    // TSR
+  r[MDNET_REG_READ_OFFSET(0x0Cu)] = 0x01u;         // RSR: ENRSR_RXOK-ish idle
 }
 
 // Build the data-port read stream from the chip for the armed remote-DMA
@@ -187,15 +208,11 @@ static void on_rom3_sample(uint16_t sample) {
   uint8_t data = mdnet_sample_data(sample);
   ne2000_reg_write(&s_chip, reg, data);
 
-  if (reg == 0x00u) {
-    // A command write may change the page (register 7 flips between ISR
-    // and CURR) or arm a remote-DMA read. Restage register 7 immediately
-    // -- just that one, so this stays fast enough to beat the driver's
-    // very next read; the rest are refreshed by the main-loop restage.
-    if (data & CR_RREAD) {
-      prepare_read_stream();
-    }
-    rom4_bytes()[MDNET_REG_READ_OFFSET(0x07)] = ne2000_reg_read(&s_chip, 0x07u);
+  // Arm a remote-DMA read when the command register requests one. The page
+  // flip for register 7 is handled by the faster CR tap (crtap_service),
+  // not here.
+  if (reg == 0x00u && (data & CR_RREAD)) {
+    prepare_read_stream();
   }
 }
 
@@ -207,14 +224,17 @@ static void __not_in_flash_func(mdnet_core1_loop)(void) {
   static uint8_t rxbuf[FRM_CAP];
   static uint8_t txbuf[NE2000_MTU];
   for (;;) {
-    // Command bus first, every iteration, so a page-select is processed
-    // (and register 7 restaged) before the driver's next read.
+    // CR tap first, every iteration: flip register 7's page with minimal
+    // latency so it's correct before the driver's next read. Then the full
+    // command-bus drain (chip state), the data-port serve, and the fast
+    // register restage.
+    crtap_service();
     commemul_poll(on_rom3_sample);    // register + TX-byte writes
     dataport_service();               // serve data-port reads
     stage_hot();                      // fast restage of the polled registers
 
     // Deliver at most ONE queued frame per iteration, then service the
-    // command bus again right away.
+    // taps again right away.
     uint16_t n = rxq_pop(rxbuf);
     if (n > 0) {
       if (ne2000_deliver_rx(&s_chip, rxbuf, n)) {
@@ -222,6 +242,7 @@ static void __not_in_flash_func(mdnet_core1_loop)(void) {
       } else {
         s_rxDropped++;
       }
+      crtap_service();
       commemul_poll(on_rom3_sample);
       dataport_service();
     }
