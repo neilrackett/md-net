@@ -68,6 +68,12 @@ static struct {
 // Diagnostics (Core 1 writes, Core 0 logs).
 static volatile uint32_t s_rxDelivered = 0, s_rxDropped = 0;
 static volatile uint32_t s_txSent = 0, s_txDropped = 0;
+// Last remote-DMA read the driver armed, for on-hardware visibility into
+// what it is reading (header vs body, from which page, and the first bytes
+// we serve).
+static volatile uint16_t s_dbgRsar = 0, s_dbgRcnt = 0;
+static volatile uint8_t s_dbgB[4] = {0, 0, 0, 0};
+static volatile uint32_t s_dbgRreadSeq = 0;
 
 static bool rxq_push(const uint8_t *f, uint16_t len) {
   uint16_t h = s_rxq.head;
@@ -150,6 +156,13 @@ static void prepare_read_stream(void) {
   s_chip.rsar = rsar;
   s_chip.rcnt = rcnt;
   dataport_arm(s_readStream, n);
+
+  s_dbgRsar = rsar;
+  s_dbgRcnt = n;
+  for (int i = 0; i < 4; i++) {
+    s_dbgB[i] = (i < n) ? s_readStream[i] : 0u;
+  }
+  s_dbgRreadSeq++;
 }
 
 // commemul callback (Core 1): one ROM3 sample == one EtherNEC register or
@@ -160,13 +173,14 @@ static void on_rom3_sample(uint16_t sample) {
   ne2000_reg_write(&s_chip, reg, data);
 
   if (reg == 0x00u) {
-    // A command write may change the page (so register reads mean
-    // something different now) or arm a remote-DMA read. Restage
-    // immediately so the driver's very next read sees the right value.
+    // A command write may change the page (register 7 flips between ISR
+    // and CURR) or arm a remote-DMA read. Restage register 7 immediately
+    // -- just that one, so this stays fast enough to beat the driver's
+    // very next read; the rest are refreshed by the main-loop restage.
     if (data & CR_RREAD) {
       prepare_read_stream();
     }
-    restage_registers();
+    rom4_bytes()[MDNET_REG_READ_OFFSET(0x07)] = ne2000_reg_read(&s_chip, 0x07u);
   }
 }
 
@@ -285,5 +299,18 @@ void mdnet_poll(void) {
     lastDp = dp;
     lastRx = rx;
     lastTx = tx;
+  }
+
+  // Sample the most recent remote-DMA read the driver armed: rcnt=4 is a
+  // packet header (b[0]=status should be 01, b[1]=next page ~$47..$60),
+  // rcnt=2 the ethertype, larger is a body. Shows whether the driver reads
+  // sane headers from the right page.
+  static uint32_t lastRread = 0;
+  uint32_t rr = s_dbgRreadSeq;
+  if (rr != lastRread) {
+    DPRINTF("mdnet: RREAD rsar=%04x rcnt=%u [%02x %02x %02x %02x]\n",
+            (unsigned)s_dbgRsar, (unsigned)s_dbgRcnt, s_dbgB[0], s_dbgB[1],
+            s_dbgB[2], s_dbgB[3]);
+    lastRread = rr;
   }
 }

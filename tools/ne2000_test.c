@@ -162,8 +162,9 @@ static void test_rx_roundtrip(void) {
 
   assert(status == 0x01 && "RSR = ENRSR_RXOK");
   assert(next == chip.curr && "header next-page == CURR");
-  // count = 4 (hdr) + max(len,60) + 4 (CRC) = 4 + 100 + 4 = 108.
-  assert(count == 108 && "header byte count");
+  // count = frame + CRC, excluding the 4-byte header (what the driver
+  // reads as the body length) = max(len,60) + 4 = 100 + 4 = 104.
+  assert(count == 104 && "header byte count");
   assert(next >= NE2000_RX_START_PAGE && next <= NE2000_STOP_PAGE);
 
   // Read the frame body and check the first bytes match.

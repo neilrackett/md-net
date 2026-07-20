@@ -258,13 +258,16 @@ bool ne2000_deliver_rx(ne2000_t *chip, const uint8_t *frame, uint16_t len) {
   // Pad to the 60-byte Ethernet minimum, then append a 4-byte CRC slot the
   // driver discards; the on-ring frame is (padded frame + CRC).
   uint16_t frame_len = len < 60u ? 60u : len;
-  uint16_t on_ring = (uint16_t)(frame_len + 4u);  // + CRC
-  if (on_ring > NE2000_MTU) {
+  // The 8390 header's byte-count field is the frame data FOLLOWING the
+  // header, including CRC and EXCLUDING the 4 header bytes -- the EtherNEC
+  // driver reads exactly this many bytes and rejects >1518 (see NE.S
+  // ei_receive line 768/789).
+  uint16_t count = (uint16_t)(frame_len + 4u);  // frame + CRC
+  if (count > NE2000_MTU) {
     return false;  // oversize, drop
   }
-  // Standard 8390 header byte count includes the 4 header bytes.
-  uint16_t count = (uint16_t)(on_ring + 4u);
-  uint16_t pages = (uint16_t)((count + NE2000_PAGE_SIZE - 1u) /
+  uint16_t total = (uint16_t)(count + 4u);  // + 4-byte header (ring space)
+  uint16_t pages = (uint16_t)((total + NE2000_PAGE_SIZE - 1u) /
                               NE2000_PAGE_SIZE);
 
   uint8_t start_page = chip->curr;
