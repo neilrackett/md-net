@@ -141,6 +141,21 @@ static void restage_registers(void) {
   }
 }
 
+// Fast restage of only the registers the driver polls in steady state.
+// Register 7 (ISR in page 0, CURR in page 1) is the hot one the receive
+// loop reads back-to-back; the others change rarely but are cheap. Run
+// every Core-1 iteration instead of the full 16-register restage so the
+// loop stays short enough to process the driver's page-select before its
+// next read (a full restage was a ~1us blind spot -- half the loop --
+// during which page-selects were missed and register 7 read stale).
+static void stage_hot(void) {
+  volatile uint8_t *r = rom4_bytes();
+  r[MDNET_REG_READ_OFFSET(0x07u)] = ne2000_reg_read(&s_chip, 0x07u);  // ISR/CURR
+  r[MDNET_REG_READ_OFFSET(0x03u)] = ne2000_reg_read(&s_chip, 0x03u);  // BNRY
+  r[MDNET_REG_READ_OFFSET(0x04u)] = ne2000_reg_read(&s_chip, 0x04u);  // TSR
+  r[MDNET_REG_READ_OFFSET(0x0Cu)] = ne2000_reg_read(&s_chip, 0x0Cu);  // RSR
+}
+
 // Build the data-port read stream from the chip for the armed remote-DMA
 // read and hand it to the serve path. Non-destructive: rewinds RSAR/RCNT
 // so the ST's own reads reproduce the transfer.
@@ -192,13 +207,14 @@ static void __not_in_flash_func(mdnet_core1_loop)(void) {
   static uint8_t rxbuf[FRM_CAP];
   static uint8_t txbuf[NE2000_MTU];
   for (;;) {
-    dataport_service();               // serve data-port reads
+    // Command bus first, every iteration, so a page-select is processed
+    // (and register 7 restaged) before the driver's next read.
     commemul_poll(on_rom3_sample);    // register + TX-byte writes
+    dataport_service();               // serve data-port reads
+    stage_hot();                      // fast restage of the polled registers
 
-    // Deliver at most ONE queued frame per iteration, and drain the command
-    // bus again right after: a ring write must never delay the driver's
-    // page-select long enough for it to read a stale register 7 (ISR where
-    // it expects CURR), which self-locks the receive loop.
+    // Deliver at most ONE queued frame per iteration, then service the
+    // command bus again right away.
     uint16_t n = rxq_pop(rxbuf);
     if (n > 0) {
       if (ne2000_deliver_rx(&s_chip, rxbuf, n)) {
@@ -207,6 +223,7 @@ static void __not_in_flash_func(mdnet_core1_loop)(void) {
         s_rxDropped++;
       }
       commemul_poll(on_rom3_sample);
+      dataport_service();
     }
 
     uint16_t t = ne2000_take_tx(&s_chip, txbuf);  // hand off transmit frames
@@ -217,7 +234,6 @@ static void __not_in_flash_func(mdnet_core1_loop)(void) {
         s_txDropped++;
       }
     }
-    restage_registers();              // reflect ISR/CURR changes
   }
 }
 
