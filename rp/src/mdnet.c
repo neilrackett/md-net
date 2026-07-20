@@ -150,17 +150,60 @@ static uint8_t reg7_value(void) {
   return (s_curpage == 1u) ? s_chip.curr : s_chip.isr;
 }
 
-// Drain the low-latency ROM3 CR tap: for each command-register write, track
-// the selected page and flip register 7 immediately. This is the fast path
-// that beats the driver's page-select -> CURR-read window (the commemul DMA
-// ring was too slow, leaving register 7 stale ~50% of the time).
+// Shadow RSAR/RCNT tracked from the fast CR tap, so a remote-DMA read is
+// armed with the right address the instant CR=RREAD is seen -- the
+// commemul-driven arm was too slow, so the driver's first data-port read
+// (the packet-header status byte) got a stale byte and header validation
+// failed, so it never read packet bodies.
+static uint16_t s_shadowRsar = 0, s_shadowRcnt = 0;
+
+// Build + arm the data-port read stream from the shadow RSAR/RCNT.
+static void arm_read_stream(void) {
+  uint16_t n = ne2000_peek_dma(&s_chip, s_shadowRsar, s_shadowRcnt,
+                               s_readStream, (uint16_t)sizeof(s_readStream));
+  dataport_arm(s_readStream, n);
+
+  s_dbgRsar = s_shadowRsar;
+  s_dbgRcnt = n;
+  for (int i = 0; i < 4; i++) {
+    s_dbgB[i] = (i < n) ? s_readStream[i] : 0u;
+  }
+  s_dbgRreadSeq++;
+}
+
+// Drain the low-latency ROM3 CR tap. It sees every register/data write in
+// order with minimal latency (direct FIFO), so it owns the two things that
+// must beat the driver's next read: the register-7 page flip, and arming a
+// remote-DMA read (shadowing RSAR/RCNT/CR).
 static void crtap_service(void) {
   uint16_t addr;
   while (dataport_crtap_get(&addr)) {
-    if (mdnet_sample_reg(addr) == 0x00u) {  // command-register write
-      uint8_t cr = mdnet_sample_data(addr);
-      s_curpage = (uint8_t)((cr >> 6) & 0x03u);
-      rom4_bytes()[MDNET_REG_READ_OFFSET(0x07u)] = reg7_value();
+    uint8_t reg = mdnet_sample_reg(addr);
+    uint8_t data = mdnet_sample_data(addr);
+    switch (reg) {
+      case 0x08u:  // RSARLO
+        s_shadowRsar = (uint16_t)((s_shadowRsar & 0xFF00u) | data);
+        break;
+      case 0x09u:  // RSARHI
+        s_shadowRsar =
+            (uint16_t)((s_shadowRsar & 0x00FFu) | ((uint16_t)data << 8));
+        break;
+      case 0x0Au:  // RCNTLO
+        s_shadowRcnt = (uint16_t)((s_shadowRcnt & 0xFF00u) | data);
+        break;
+      case 0x0Bu:  // RCNTHI
+        s_shadowRcnt =
+            (uint16_t)((s_shadowRcnt & 0x00FFu) | ((uint16_t)data << 8));
+        break;
+      case 0x00u:  // command register
+        s_curpage = (uint8_t)((data >> 6) & 0x03u);
+        rom4_bytes()[MDNET_REG_READ_OFFSET(0x07u)] = reg7_value();
+        if (data & CR_RREAD) {
+          arm_read_stream();
+        }
+        break;
+      default:
+        break;
     }
   }
 }
@@ -177,43 +220,14 @@ static void stage_hot(void) {
   r[MDNET_REG_READ_OFFSET(0x0Cu)] = 0x01u;         // RSR: ENRSR_RXOK-ish idle
 }
 
-// Build the data-port read stream from the chip for the armed remote-DMA
-// read and hand it to the serve path. Non-destructive: rewinds RSAR/RCNT
-// so the ST's own reads reproduce the transfer.
-static void prepare_read_stream(void) {
-  uint16_t rsar = s_chip.rsar, rcnt = s_chip.rcnt;
-  uint16_t n = rcnt;
-  if (n > sizeof(s_readStream)) {
-    n = sizeof(s_readStream);
-  }
-  for (uint16_t i = 0; i < n; i++) {
-    s_readStream[i] = ne2000_reg_read(&s_chip, 0x10u);
-  }
-  s_chip.rsar = rsar;
-  s_chip.rcnt = rcnt;
-  dataport_arm(s_readStream, n);
-
-  s_dbgRsar = rsar;
-  s_dbgRcnt = n;
-  for (int i = 0; i < 4; i++) {
-    s_dbgB[i] = (i < n) ? s_readStream[i] : 0u;
-  }
-  s_dbgRreadSeq++;
-}
-
 // commemul callback (Core 1): one ROM3 sample == one EtherNEC register or
-// data-port write.
+// data-port write. This drives the full chip model (state, TX-byte writes
+// into the ring). The two latency-critical actions -- the register-7 page
+// flip and arming a remote-DMA read -- are handled by the faster CR tap
+// (crtap_service), not here.
 static void on_rom3_sample(uint16_t sample) {
-  uint8_t reg = mdnet_sample_reg(sample);
-  uint8_t data = mdnet_sample_data(sample);
-  ne2000_reg_write(&s_chip, reg, data);
-
-  // Arm a remote-DMA read when the command register requests one. The page
-  // flip for register 7 is handled by the faster CR tap (crtap_service),
-  // not here.
-  if (reg == 0x00u && (data & CR_RREAD)) {
-    prepare_read_stream();
-  }
+  ne2000_reg_write(&s_chip, mdnet_sample_reg(sample),
+                   mdnet_sample_data(sample));
 }
 
 // Core 1: the NE2000 servicing loop. The data port and the command bus are

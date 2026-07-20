@@ -83,6 +83,22 @@ static void dma_write_byte(ne2000_t *chip, uint16_t addr, uint8_t data) {
   }
 }
 
+uint16_t ne2000_peek_dma(const ne2000_t *chip, uint16_t rsar, uint16_t rcnt,
+                         uint8_t *out, uint16_t maxlen) {
+  uint16_t n = rcnt < maxlen ? rcnt : maxlen;
+  uint16_t addr = rsar;
+  uint16_t stop = (uint16_t)chip->pstop * NE2000_PAGE_SIZE;
+  uint16_t start = (uint16_t)chip->pstart * NE2000_PAGE_SIZE;
+  for (uint16_t i = 0; i < n; i++) {
+    out[i] = dma_read_byte(chip, addr);
+    addr++;
+    if (addr >= DMA_BUFFER_BASE && addr >= stop && stop > start) {
+      addr = start;  // wrap at the rx ring end, matching dma_advance
+    }
+  }
+  return n;
+}
+
 // Advance the remote-DMA pointer after a data-port access, wrapping at the
 // rx ring stop page back to the start page (the chip wraps while reading a
 // received frame that straddles the ring end). PROM/tx-page accesses stay
