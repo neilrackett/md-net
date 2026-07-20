@@ -34,6 +34,7 @@
 #include "pico/cyw43_arch.h"
 #include "pico/multicore.h"
 #include "pico/platform.h"
+#include "pico/time.h"
 
 // 8390 command-register bits we watch for side effects at the bus layer.
 #define CR_TRANS 0x04u
@@ -259,12 +260,19 @@ static err_t mdnet_netif_input(struct pbuf *p, struct netif *inp) {
   if (s_active && len >= 14u && len <= NE2000_MTU) {
     static uint8_t rxbuf[NE2000_MTU];
     pbuf_copy_partial(p, rxbuf, len, 0);
-    // Diagnostic: surface every ARP request so the UART shows whether the
-    // laptop's who-has for the ST's IP actually reaches the NE2000 queue.
+    // Diagnostic: surface ARP requests so the UART shows the laptop's
+    // who-has reaching the NE2000 queue. Rate-limited to ~2/s -- this runs
+    // in the Core-0 netif path and a blocking UART write per ARP (LAN ARP
+    // is chatty) would stall frame intake.
     if (len >= 42u && rxbuf[12] == 0x08u && rxbuf[13] == 0x06u &&
         rxbuf[21] == 0x01u) {
-      DPRINTF("mdnet: ARP who-has %u.%u.%u.%u\n", rxbuf[38], rxbuf[39],
-              rxbuf[40], rxbuf[41]);
+      static uint32_t s_lastArpLog;
+      uint32_t now = time_us_32();
+      if (now - s_lastArpLog > 500000u) {
+        s_lastArpLog = now;
+        DPRINTF("mdnet: ARP who-has %u.%u.%u.%u\n", rxbuf[38], rxbuf[39],
+                rxbuf[40], rxbuf[41]);
+      }
     }
     if (!rxq_push(rxbuf, len)) {
       s_rxDropped++;

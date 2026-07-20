@@ -287,6 +287,24 @@ bool ne2000_deliver_rx(ne2000_t *chip, const uint8_t *frame, uint16_t len) {
   uint16_t pages = (uint16_t)((total + NE2000_PAGE_SIZE - 1u) /
                               NE2000_PAGE_SIZE);
 
+  // Pace delivery to the driver's consumption. The EtherNEC driver
+  // re-reads CURR (reg 7, page 1) and needs a stable value; if we keep
+  // piling frames into the ring, CURR churns and Core 1 stays busy in
+  // this memcpy, so the driver reads a stale/mid-flight CURR, loses its
+  // place, and wanders below the ring -- from which it never recovers
+  // while we keep flooding. Holding off when the ring already carries a
+  // few unread pages keeps CURR still long enough for the driver to
+  // re-sync, drain, and advance BNRY. Unread span = CURR - BNRY over the
+  // rx ring, so this self-paces: a stalled driver stops us delivering,
+  // which is exactly what lets it recover.
+  int unread = (int)chip->curr - (int)chip->bnry;
+  if (unread < 0) {
+    unread += (int)(chip->pstop - chip->pstart);
+  }
+  if (unread > NE2000_RX_PACE_PAGES) {
+    return false;  // paced drop -- let the driver catch up
+  }
+
   uint8_t start_page = chip->curr;
   uint8_t next_page = (uint8_t)(start_page + pages);
   if (next_page >= chip->pstop) {
