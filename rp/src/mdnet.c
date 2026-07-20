@@ -324,6 +324,23 @@ void mdnet_poll(void) {
   static uint8_t txbuf[FRM_CAP];
   uint16_t t;
   while ((t = txq_pop(txbuf)) > 0) {
+    // Diagnostic: identify what the driver is transmitting. ARP op 2 = a
+    // reply (what a pinged host must send); op 1 = its own request. For IP,
+    // proto 1 = ICMP (the echo reply). Not rate-limited -- TX is low-rate.
+    if (t >= 42u && txbuf[12] == 0x08u && txbuf[13] == 0x06u) {
+      DPRINTF("mdnet: TX ARP op=%u sndr=%u.%u.%u.%u tgt=%u.%u.%u.%u "
+              "smac=%02x:%02x:%02x:%02x:%02x:%02x\n",
+              txbuf[21], txbuf[28], txbuf[29], txbuf[30], txbuf[31], txbuf[38],
+              txbuf[39], txbuf[40], txbuf[41], txbuf[22], txbuf[23], txbuf[24],
+              txbuf[25], txbuf[26], txbuf[27]);
+    } else if (t >= 34u && txbuf[12] == 0x08u && txbuf[13] == 0x00u) {
+      DPRINTF("mdnet: TX IP proto=%u %u.%u.%u.%u -> %u.%u.%u.%u\n", txbuf[23],
+              txbuf[26], txbuf[27], txbuf[28], txbuf[29], txbuf[30], txbuf[31],
+              txbuf[32], txbuf[33]);
+    } else {
+      DPRINTF("mdnet: TX %u bytes ethertype=%02x%02x\n", (unsigned)t, txbuf[12],
+              txbuf[13]);
+    }
     int err = cyw43_send_ethernet(&cyw43_state, CYW43_ITF_STA, t, txbuf, false);
     if (err != 0) {
       DPRINTF("mdnet TX %u bytes failed: %d\n", (unsigned)t, err);
