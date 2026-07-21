@@ -99,7 +99,7 @@ void ne2000_set_yield(ne2000_yield_fn fn);
 // register path must respond well inside the m68k's back-to-back bus
 // cycle pace. No-op for the host-side tests.
 #if defined(PICO_RP2040)
-#include "pico/platform.h"
+#include "pico.h"
 #define NE2000_TIME_CRITICAL(fn) __not_in_flash_func(fn)
 #else
 #define NE2000_TIME_CRITICAL(fn) fn

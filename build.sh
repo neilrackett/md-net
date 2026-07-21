@@ -1,7 +1,12 @@
 #!/bin/bash
+# Abort on the first failing step: without this, a failed sub-build (e.g.
+# the RP compile) was survived silently -- the script then copied a STALE
+# rp/dist UF2 into dist/ and reported success, shipping old firmware
+# under a new version number.
+set -e
 
 # Get the absolute path of the current script
-SCRIPT_DIR=$(dirname "$(realpath "$0")") 
+SCRIPT_DIR=$(dirname "$(realpath "$0")")
 
 # Ensure all required arguments are provided
 if [ -z "$1" ] || [ -z "$2" ] || [ -z "$3" ]; then
