@@ -99,16 +99,22 @@ static bool rxq_push(const uint8_t *f, uint16_t len) {
   return true;
 }
 
-static uint16_t rxq_pop(uint8_t *out) {
+// Zero-copy consume: expose the tail slot directly (SPSC -- Core 0 only
+// moves head, so the slot is stable until rxq_advance). Avoids a
+// frame-sized memcpy on Core 1, whose loop latency bounds the register-7
+// page-flip race.
+static const uint8_t *rxq_peek(uint16_t *len) {
   uint16_t t = s_rxq.tail;
   if (t == s_rxq.head) {
-    return 0;
+    return NULL;
   }
-  uint16_t len = s_rxq.len[t];
-  memcpy(out, s_rxq.data[t], len);
+  *len = s_rxq.len[t];
+  return s_rxq.data[t];
+}
+
+static void rxq_advance(void) {
   __sync_synchronize();
-  s_rxq.tail = (uint16_t)((t + 1u) % RXQ_SLOTS);
-  return len;
+  s_rxq.tail = (uint16_t)((s_rxq.tail + 1u) % RXQ_SLOTS);
 }
 
 static bool txq_push(const uint8_t *f, uint16_t len) {
@@ -232,9 +238,19 @@ static void on_rom3_sample(uint16_t sample) {
 // never busy at the same instant (the driver either writes registers or
 // reads the data port), so a single non-blocking loop keeps both
 // responsive.
+// Latency-critical tap servicing, also installed as the ne2000 yield hook
+// so it keeps running between chunks of a frame delivery. Deliberately
+// excludes commemul_poll: processing register writes mid-delivery would
+// re-enter the chip model.
+static void __not_in_flash_func(core1_yield)(void) {
+  crtap_service();
+  dataport_service(mdnet_dp_next);
+  dataport_set_byte(ne2000_dma_current(&s_chip));
+}
+
 static void __not_in_flash_func(mdnet_core1_loop)(void) {
-  static uint8_t rxbuf[FRM_CAP];
   static uint8_t txbuf[NE2000_MTU];
+  ne2000_set_yield(core1_yield);
   for (;;) {
     // CR tap first, every iteration: flip register 7's page with minimal
     // latency so it's correct before the driver's next read. Then the full
@@ -246,15 +262,18 @@ static void __not_in_flash_func(mdnet_core1_loop)(void) {
     dataport_set_byte(ne2000_dma_current(&s_chip));  // serve the live byte
     stage_hot();                           // fast restage of the polled registers
 
-    // Deliver at most ONE queued frame per iteration, then service the
-    // taps again right away.
-    uint16_t n = rxq_pop(rxbuf);
-    if (n > 0) {
-      if (ne2000_deliver_rx(&s_chip, rxbuf, n)) {
+    // Deliver at most ONE queued frame per iteration, straight from the
+    // queue slot (no staging copy); the yield hook keeps the taps live
+    // through the ring copy.
+    uint16_t n = 0;
+    const uint8_t *f = rxq_peek(&n);
+    if (f != NULL) {
+      if (ne2000_deliver_rx(&s_chip, f, n)) {
         s_rxDelivered++;
       } else {
         s_rxDropped++;
       }
+      rxq_advance();
       crtap_service();
       commemul_poll(on_rom3_sample);
       dataport_service(mdnet_dp_next);

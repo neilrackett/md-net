@@ -121,6 +121,14 @@ static void ne2000_command(ne2000_t *chip, uint8_t cmd) {
     chip->started = true;
   }
 
+  // Remote WRITE armed: the data-port writes that follow are the TX frame
+  // upload. Restart the staging capture -- bytes are stored positionally
+  // (see txstage in ne2000.h), so the driver's write RSAR scale (halved
+  // word-style addresses on EtherNEC) is irrelevant.
+  if ((cmd & CR_RDMA_MASK) == CR_RWRITE) {
+    chip->txstage_len = 0;
+  }
+
   // Transmit: hand the staged frame at the tx page to the bridge. The
   // frame was just written there via remote-DMA write; TCNT holds its
   // length. Latch it for ne2000_take_tx() and report success.
@@ -140,6 +148,10 @@ void ne2000_reg_write(ne2000_t *chip, uint8_t reg, uint8_t data) {
     return;
   }
   if (reg == REG_DATAPORT) {
+    // Positional TX-frame capture (see ne2000_command / txstage).
+    if (chip->txstage_len < NE2000_MTU) {
+      chip->txstage[chip->txstage_len++] = data;
+    }
     dma_write_byte(chip, chip->rsar, data);
     dma_advance(chip);
     return;
@@ -230,6 +242,19 @@ uint8_t ne2000_reg_read(ne2000_t *chip, uint8_t reg) {
   }
 }
 
+// Optional yield hook, called between ring_write chunks. The RP bus glue
+// installs its low-latency tap servicing here so a frame delivery (a
+// multi-hundred-byte copy) can never stall the register-7 page flip or the
+// data-port serve for longer than one chunk. NULL (the default, and the
+// host tests) means no yielding.
+static ne2000_yield_fn s_yield = NULL;
+void ne2000_set_yield(ne2000_yield_fn fn) { s_yield = fn; }
+
+// Yield granularity for ring_write: a 64-byte memcpy is well under a
+// microsecond on the RP2040, so the taps are serviced often enough to win
+// the driver's page-select -> register-read window even mid-delivery.
+#define RING_WRITE_YIELD_CHUNK 64u
+
 // Copy n bytes into the rx ring at *off, wrapping at the rx RING boundary
 // (pstart..pstop), NOT the full buffer -- this must match the serve's wrap
 // (dma_advance wraps RSAR at pstop -> pstart) or a packet that straddles
@@ -249,6 +274,9 @@ static void ring_write(ne2000_t *chip, uint16_t *off, const uint8_t *src,
     if (chunk > n) {
       chunk = n;
     }
+    if (chunk > RING_WRITE_YIELD_CHUNK) {
+      chunk = RING_WRITE_YIELD_CHUNK;
+    }
     if (src != NULL) {
       memcpy(&chip->mem[o], src, chunk);
       src += chunk;
@@ -260,6 +288,9 @@ static void ring_write(ne2000_t *chip, uint16_t *off, const uint8_t *src,
       o = low;  // wrap at the rx ring end, matching dma_advance
     }
     n = (uint16_t)(n - chunk);
+    if (s_yield != NULL) {
+      s_yield();  // keep reg-7 flips + data-port serve live mid-copy
+    }
   }
   *off = o;
 }
@@ -348,10 +379,14 @@ uint16_t ne2000_take_tx(ne2000_t *chip, uint8_t *out) {
   if (len > NE2000_MTU) {
     len = NE2000_MTU;
   }
-  uint16_t src = (uint16_t)((chip->tpsr - NE2000_RING_FIRST_PAGE) *
-                            NE2000_PAGE_SIZE);
+  // Serve from the positional staging capture, not mem[]: the EtherNEC
+  // driver's write RSAR is word-scaled (halved), so the frame's mem[]
+  // placement is unreliable -- the staging order is authoritative.
+  if (len > chip->txstage_len) {
+    len = chip->txstage_len;  // never hand out stale/unwritten tail bytes
+  }
   for (uint16_t i = 0; i < len; i++) {
-    out[i] = chip->mem[(uint16_t)((src + i) % NE2000_RING_BYTES)];
+    out[i] = chip->txstage[i];
   }
   // Clear the transmit latch so we hand each frame out exactly once.
   chip->cr &= (uint8_t)~CR_TRANS;

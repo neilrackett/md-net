@@ -78,8 +78,22 @@ typedef struct {
   uint8_t prom[NE2000_PROM_SIZE];    // MAC PROM (doubled bytes + $57 sig)
   uint8_t mem[NE2000_RING_BYTES];    // 16 KB buffer RAM (ring + tx page)
 
+  // TX staging: the frame the driver uploads via remote-DMA writes,
+  // captured in arrival order. The EtherNEC driver arms its TX write with
+  // a halved (word-style) RSAR while reads stay byte-addressed, so the
+  // written bytes cannot reliably be placed in mem[] by address; staging
+  // them positionally sidesteps the address-scale mismatch entirely.
+  uint8_t txstage[NE2000_MTU];
+  uint16_t txstage_len;
+
   bool started;       // CR START seen since last STOP
 } ne2000_t;
+
+// Optional yield callback, invoked between chunks of a frame delivery so
+// the RP bus glue can keep servicing latency-critical taps (register-7
+// page flips, data-port serve) while a long ring copy is in flight.
+typedef void (*ne2000_yield_fn)(void);
+void ne2000_set_yield(ne2000_yield_fn fn);
 
 // Reset the chip to power-on state and load the station MAC (also builds
 // the doubled PROM image). Safe to call repeatedly.

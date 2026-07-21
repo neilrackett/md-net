@@ -188,11 +188,15 @@ static void test_tx_roundtrip(void) {
   uint8_t frame[64];
   for (int i = 0; i < 64; i++) frame[i] = (uint8_t)(0x80 + i);
 
-  // ei_start_xmit: remote-DMA write to the tx page, then transmit.
+  // ei_start_xmit: remote-DMA write to the tx page, then transmit. The
+  // real EtherNEC driver arms the write with a HALVED (word-style) RSAR --
+  // $2000 for the tx page at byte $4000 -- while reads stay byte-addressed
+  // (observed on hardware). take_tx must therefore serve the positionally
+  // staged bytes, not a mem[] region derived from the write address.
   wr(&chip, R_RCNTLO, sizeof(frame));
   wr(&chip, R_RCNTHI, 0);
   wr(&chip, R_RSARLO, 0);
-  wr(&chip, R_RSARHI, NE2000_TX_START_PAGE);
+  wr(&chip, R_RSARHI, NE2000_TX_START_PAGE / 2);  // halved: $20 -> $2000
   wr(&chip, R_CR, CR_RWRITE | CR_START);
   for (int i = 0; i < (int)sizeof(frame); i++) wr(&chip, R_DATA, frame[i]);
   wr(&chip, R_CR, CR_NODMA | CR_START);

@@ -55,6 +55,9 @@ static inline void dataport_read_program_init(PIO pio, uint sm, uint offset,
     // commemul_read: the sampled address ends up in the upper 16 bits of
     // the pushed word with A_i at bit i.
     sm_config_set_in_shift(&c, true, true, addr_pin_count);
+    // This SM never transmits, so join both FIFOs into an 8-deep RX FIFO
+    // for burst tolerance while Core 1 is servicing something else.
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_RX);
     sm_config_set_clkdiv(&c, div);
 
     pio_sm_init(pio, sm, offset, &c);
@@ -66,6 +69,7 @@ static inline void crtap_read_program_init(PIO pio, uint sm, uint offset,
     pio_sm_config c = crtap_read_program_get_default_config(offset);
     sm_config_set_in_pins(&c, addr_pin_base);
     sm_config_set_in_shift(&c, true, true, addr_pin_count);
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_RX);  // RX-only: 8-deep FIFO
     sm_config_set_clkdiv(&c, div);
     pio_sm_init(pio, sm, offset, &c);
 }
