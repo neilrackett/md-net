@@ -31,7 +31,7 @@
     nop                              [DATAPORT_SAFE_WAIT]
     in pins, DATAPORT_BUS_PINS                 ; sample the address (no autopush)
     wait 1 gpio DATAPORT_ROM4_GPIO             ; cycle end
-    push noblock                               ; deliver the event AFTER the cycle
+    push                                       ; deliver AFTER the cycle (blocks when full: delayed, never lost)
 .wrap
 
 ; Same read-only tap, but on ROM3 (register/data-port WRITES, which are
@@ -52,7 +52,7 @@
     nop                              [DATAPORT_SAFE_WAIT]
     in pins, DATAPORT_BUS_PINS                 ; sample the address (no autopush)
     wait 1 gpio DATAPORT_ROM3_GPIO             ; cycle end
-    push noblock                               ; deliver the event AFTER the cycle
+    push                                       ; deliver AFTER the cycle (blocks when full: delayed, never lost)
 .wrap
 
 % c-sdk {

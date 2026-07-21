@@ -99,9 +99,21 @@ void __not_in_flash_func(dataport_stage4)(uint8_t b0, uint8_t b1, uint8_t b2,
 // duplicated served bytes (observed: the PROM MAC read back as
 // 28:28:28:cd:c1:c1). Exits on command-register activity (the driver
 // moved on) or a sustained quiet period.
+// Restage hook (mdnet.c): rebuilds the 4-byte window from the live RSAR.
+extern void mdnet_dp_restage(void);
+
 void __not_in_flash_func(dataport_serve_burst)(void (*consumed)(uint8_t slot)) {
   uint32_t quiet = 0;
+  bool dirty = false;
   while (quiet < 20000u) {  // ~200 us of bus silence ends the burst
+    // Deferred restage: only rewrite the window once the read burst has
+    // paused (~30 idle spins ~ 700 ns) -- a movep.l burst consumes the
+    // pre-staged window untouched; pollers read >= 1.5 us apart so the
+    // deferral is invisible to them.
+    if (dirty && quiet > 30u) {
+      mdnet_dp_restage();
+      dirty = false;
+    }
     if (!pio_sm_is_rx_fifo_empty(s_pio, (uint)s_sm)) {
       uint32_t word = pio_sm_get(s_pio, (uint)s_sm);
       uint16_t addr = (uint16_t)(word >> 16);
@@ -110,6 +122,7 @@ void __not_in_flash_func(dataport_serve_burst)(void (*consumed)(uint8_t slot)) {
         s_count++;
         dataport_note_addr(addr);
         consumed((uint8_t)((addr >> 1) & 3u));  // slot = which window byte
+        dirty = true;
         quiet = 0;
         continue;
       }
@@ -124,9 +137,13 @@ void __not_in_flash_func(dataport_serve_burst)(void (*consumed)(uint8_t slot)) {
     }
     quiet++;
   }
+  if (dirty) {
+    mdnet_dp_restage();  // burst over: leave the window current
+  }
 }
 
 void __not_in_flash_func(dataport_service)(void (*consumed)(uint8_t slot)) {
+  bool dirty = false;
   while (!pio_sm_is_rx_fifo_empty(s_pio, (uint)s_sm)) {
     uint32_t word = pio_sm_get(s_pio, (uint)s_sm);
     uint16_t addr = (uint16_t)(word >> 16);
@@ -142,6 +159,10 @@ void __not_in_flash_func(dataport_service)(void (*consumed)(uint8_t slot)) {
     s_count++;
     dataport_note_addr(addr);
     consumed((uint8_t)((addr >> 1) & 3u));
+    dirty = true;
+  }
+  if (dirty) {
+    mdnet_dp_restage();  // events drained: window current for the next read
   }
 }
 

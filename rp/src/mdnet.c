@@ -199,7 +199,7 @@ static uint8_t reg7_value(void) {
 // the loop also refreshes the served byte each iteration so an RSAR change
 // from the register path is reflected before the ST reads.
 // Re-stage the 4-byte serve window from the live RSAR position.
-static void __not_in_flash_func(mdnet_dp_restage)(void) {
+void __not_in_flash_func(mdnet_dp_restage)(void) {
   dataport_stage4(ne2000_dma_peek(&s_chip, 0), ne2000_dma_peek(&s_chip, 1),
                   ne2000_dma_peek(&s_chip, 2), ne2000_dma_peek(&s_chip, 3));
 }
@@ -223,7 +223,10 @@ static void __not_in_flash_func(mdnet_dp_consumed)(uint8_t slot) {
   for (uint8_t i = 0; i <= slot; i++) {
     ne2000_dma_advance(&s_chip);
   }
-  mdnet_dp_restage();
+  // NO restage here: rewriting the slots mid-movep-burst shifts the
+  // window under the reads that are still consuming it. The caller
+  // restages once the burst has gone quiet (dataport_serve_burst /
+  // dataport_service).
 }
 
 // Drain the low-latency ROM3 CR tap: for each command-register write, track
