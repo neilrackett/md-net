@@ -110,7 +110,7 @@ void __not_in_flash_func(dataport_serve_burst)(void (*consumed)(uint8_t slot)) {
     // paused (~30 idle spins ~ 700 ns) -- a movep.l burst consumes the
     // pre-staged window untouched; pollers read >= 1.5 us apart so the
     // deferral is invisible to them.
-    if (dirty && quiet > 30u) {
+    if (dirty && quiet > 16u) {
       mdnet_dp_restage();
       dirty = false;
     }

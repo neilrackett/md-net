@@ -198,8 +198,11 @@ static uint8_t reg7_value(void) {
 // by dataport_service after each data-port read) steps to the next byte;
 // the loop also refreshes the served byte each iteration so an RSAR change
 // from the register path is reflected before the ST reads.
+static int8_t s_dpPrevSlot;  // defined below with the consume logic
+
 // Re-stage the 4-byte serve window from the live RSAR position.
 void __not_in_flash_func(mdnet_dp_restage)(void) {
+  s_dpPrevSlot = -1;  // slots rebased: the next event starts a new group
   dataport_stage4(ne2000_dma_peek(&s_chip, 0), ne2000_dma_peek(&s_chip, 1),
                   ne2000_dma_peek(&s_chip, 2), ne2000_dma_peek(&s_chip, 3));
 }
@@ -208,8 +211,18 @@ void __not_in_flash_func(mdnet_dp_restage)(void) {
 // bits): advance the stream past it and restage. movep.l bursts consume
 // slots 0..3 without any restage in between -- the window already holds
 // the right bytes -- so serve latency no longer matters within a burst.
+// Slot of the previous event since the last restage: events with
+// ascending slots are ONE access group (a movep burst reading the staged
+// window at cumulative positions); a repeated or lower slot starts a new
+// group (a poller re-reading slot 0). Advance by the delta within a
+// group, by slot+1 at a group start -- 1 per poll, 4 total for a
+// movep.l, correct for movep.w pairs.
+
 static void __not_in_flash_func(mdnet_dp_consumed)(uint8_t slot) {
-  uint8_t b = ne2000_dma_peek(&s_chip, slot);
+  uint8_t delta = ((int8_t)slot > s_dpPrevSlot)
+                      ? (uint8_t)((int8_t)slot - s_dpPrevSlot)
+                      : (uint8_t)(slot + 1u);
+  uint8_t b = ne2000_dma_peek(&s_chip, (uint16_t)(delta - 1u));  // consumed
   if (s_promIdx < sizeof(s_promCap)) {  // PROM-serve capture: consumed bytes
     s_promCap[s_promIdx++] = b;
     if (s_promIdx == sizeof(s_promCap)) {
@@ -220,9 +233,10 @@ static void __not_in_flash_func(mdnet_dp_consumed)(uint8_t slot) {
     s_srvCap[s_srvN++] = b;
     s_srvSlot[s_srvN - 1u] = slot;
   }
-  for (uint8_t i = 0; i <= slot; i++) {
+  for (uint8_t i = 0; i < delta; i++) {
     ne2000_dma_advance(&s_chip);
   }
+  s_dpPrevSlot = (int8_t)slot;
   // NO restage here: rewriting the slots mid-movep-burst shifts the
   // window under the reads that are still consuming it. The caller
   // restages once the burst has gone quiet (dataport_serve_burst /
