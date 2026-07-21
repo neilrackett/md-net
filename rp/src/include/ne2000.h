@@ -136,5 +136,10 @@ uint16_t ne2000_take_tx(ne2000_t *chip, uint8_t *out);
 // register path) is honoured without a separately-armed stream.
 uint8_t ne2000_dma_current(const ne2000_t *chip);
 void ne2000_dma_advance(ne2000_t *chip);
+// Peek the byte at RSAR+offset without advancing -- used to stage a
+// 4-byte serve window (the driver's MOVEP.L body copies read 4
+// consecutive stream bytes in back-to-back bus cycles that no per-event
+// restage can keep up with).
+uint8_t ne2000_dma_peek(const ne2000_t *chip, uint16_t offset);
 
 #endif  // NE2000_H

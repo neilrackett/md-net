@@ -79,15 +79,19 @@ static inline void dataport_note_addr(uint16_t addr) {
 uint8_t dataport_addrCapCount(void) { return s_addrN; }
 uint16_t dataport_addrCap(uint8_t i) { return s_addrCap[i & 7u]; }
 
-static inline void write_slots(uint8_t b) {
+// Stage a 4-byte WINDOW of the stream across the four slots: byte base+k
+// at slot k. A MOVEP.L body copy reads the four ascending addresses in
+// back-to-back ~250 ns bus cycles -- no per-event restage can feed those,
+// but a pre-staged window needs none: the burst naturally collects
+// b0..b3. Single move.b readers always hit slot 0 and consume b0.
+void __not_in_flash_func(dataport_stage4)(uint8_t b0, uint8_t b1, uint8_t b2,
+                                          uint8_t b3) {
   volatile uint8_t *r = rom4();
-  r[DP_SLOT0] = b;
-  r[DP_SLOT1] = b;
-  r[DP_SLOT2] = b;
-  r[DP_SLOT3] = b;
+  r[DP_SLOT0] = b0;
+  r[DP_SLOT1] = b1;
+  r[DP_SLOT2] = b2;
+  r[DP_SLOT3] = b3;
 }
-
-void __not_in_flash_func(dataport_set_byte)(uint8_t b) { write_slots(b); }
 
 // Tight serve for an armed remote read: poll only the ROM4 tap so each
 // data-port read is re-staged within ~200 ns -- the full Core-1 loop's
@@ -95,7 +99,7 @@ void __not_in_flash_func(dataport_set_byte)(uint8_t b) { write_slots(b); }
 // duplicated served bytes (observed: the PROM MAC read back as
 // 28:28:28:cd:c1:c1). Exits on command-register activity (the driver
 // moved on) or a sustained quiet period.
-void __not_in_flash_func(dataport_serve_burst)(uint8_t (*next_byte)(void)) {
+void __not_in_flash_func(dataport_serve_burst)(void (*consumed)(uint8_t slot)) {
   uint32_t quiet = 0;
   while (quiet < 20000u) {  // ~200 us of bus silence ends the burst
     if (!pio_sm_is_rx_fifo_empty(s_pio, (uint)s_sm)) {
@@ -105,7 +109,7 @@ void __not_in_flash_func(dataport_serve_burst)(uint8_t (*next_byte)(void)) {
       if (reg == DP_REG) {
         s_count++;
         dataport_note_addr(addr);
-        write_slots(next_byte());
+        consumed((uint8_t)((addr >> 1) & 3u));  // slot = which window byte
         quiet = 0;
         continue;
       }
@@ -122,7 +126,7 @@ void __not_in_flash_func(dataport_serve_burst)(uint8_t (*next_byte)(void)) {
   }
 }
 
-void __not_in_flash_func(dataport_service)(uint8_t (*next_byte)(void)) {
+void __not_in_flash_func(dataport_service)(void (*consumed)(uint8_t slot)) {
   while (!pio_sm_is_rx_fifo_empty(s_pio, (uint)s_sm)) {
     uint32_t word = pio_sm_get(s_pio, (uint)s_sm);
     uint16_t addr = (uint16_t)(word >> 16);
@@ -137,9 +141,7 @@ void __not_in_flash_func(dataport_service)(uint8_t (*next_byte)(void)) {
     }
     s_count++;
     dataport_note_addr(addr);
-    // A data-port read just consumed the served byte; stage the next one so
-    // the ST's next read gets it.
-    write_slots(next_byte());
+    consumed((uint8_t)((addr >> 1) & 3u));
   }
 }
 

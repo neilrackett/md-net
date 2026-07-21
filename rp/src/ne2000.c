@@ -110,6 +110,10 @@ uint8_t NE2000_TIME_CRITICAL(ne2000_dma_current)(const ne2000_t *chip) {
   return dma_read_byte(chip, chip->rsar);
 }
 void NE2000_TIME_CRITICAL(ne2000_dma_advance)(ne2000_t *chip) { dma_advance(chip); }
+uint8_t NE2000_TIME_CRITICAL(ne2000_dma_peek)(const ne2000_t *chip,
+                                              uint16_t offset) {
+  return dma_read_byte(chip, (uint16_t)(chip->rsar + offset));
+}
 
 // Execute a command-register write (side effects: DMA setup, transmit).
 static void NE2000_TIME_CRITICAL(ne2000_command)(ne2000_t *chip, uint8_t cmd) {

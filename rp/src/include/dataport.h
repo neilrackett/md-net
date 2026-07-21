@@ -28,12 +28,14 @@ void dataport_init(void);
 // Set the byte the data port currently serves (written to all four
 // data-port RAM slots). Call each Core-1 iteration with the chip's current
 // remote-DMA byte so RSAR changes are reflected before the ST reads.
-void dataport_set_byte(uint8_t b);
+// Stage a 4-byte stream window across the four serve slots (see
+// dataport.c). Slot k holds stream byte base+k.
+void dataport_stage4(uint8_t b0, uint8_t b1, uint8_t b2, uint8_t b3);
 
 // Drain the ROM4 tap FIFO; for each data-port read that occurred, call
 // next_byte() and serve its result (so the ST's following read gets the
 // next byte). Call from the Core-1 servicing loop.
-void dataport_service(uint8_t (*next_byte)(void));
+void dataport_service(void (*consumed)(uint8_t slot));
 
 // Non-blocking read of the low-latency ROM3 command-register tap. Returns 1
 // and stores the 16-bit ROM3 address (of a register/data write) in *addr,
@@ -49,7 +51,7 @@ uint32_t dataport_readCount(void);
 // within ~200 ns of each data-port read so back-to-back m68k reads can't
 // outrun the serve (which duplicated bytes -- e.g. the PROM MAC). Runs
 // until command-register activity or ~200 us of bus silence.
-void dataport_serve_burst(uint8_t (*next_byte)(void));
+void dataport_serve_burst(void (*consumed)(uint8_t slot));
 // Non-data-port ROM4 read counters (all registers / register 7), so a
 // driver spinning on a register poll is visible on the UART.
 uint32_t dataport_regReadCount(void);

@@ -96,6 +96,7 @@ static volatile bool s_promReady = false;
 // against the mem[] peek in the RREAD trace, divergence = serve-level
 // corruption on header reads (invisible to a memory peek).
 static volatile uint8_t s_srvCap[6];
+static volatile uint8_t s_srvSlot[6];  // which window slot each read hit
 static volatile uint8_t s_srvN = 0xFFu;
 // Unified bus-event trace: register WRITES (from commemul, reg+data) and
 // register READS (from the ROM4 tap, reg+the value staged at that
@@ -197,19 +198,32 @@ static uint8_t reg7_value(void) {
 // by dataport_service after each data-port read) steps to the next byte;
 // the loop also refreshes the served byte each iteration so an RSAR change
 // from the register path is reflected before the ST reads.
-static uint8_t __not_in_flash_func(mdnet_dp_next)(void) {
-  ne2000_dma_advance(&s_chip);
-  uint8_t b = ne2000_dma_current(&s_chip);
-  if (s_promIdx < sizeof(s_promCap)) {  // PROM-serve capture (see above)
+// Re-stage the 4-byte serve window from the live RSAR position.
+static void __not_in_flash_func(mdnet_dp_restage)(void) {
+  dataport_stage4(ne2000_dma_peek(&s_chip, 0), ne2000_dma_peek(&s_chip, 1),
+                  ne2000_dma_peek(&s_chip, 2), ne2000_dma_peek(&s_chip, 3));
+}
+
+// A data-port read consumed window byte `slot` (from the address low
+// bits): advance the stream past it and restage. movep.l bursts consume
+// slots 0..3 without any restage in between -- the window already holds
+// the right bytes -- so serve latency no longer matters within a burst.
+static void __not_in_flash_func(mdnet_dp_consumed)(uint8_t slot) {
+  uint8_t b = ne2000_dma_peek(&s_chip, slot);
+  if (s_promIdx < sizeof(s_promCap)) {  // PROM-serve capture: consumed bytes
     s_promCap[s_promIdx++] = b;
     if (s_promIdx == sizeof(s_promCap)) {
       s_promReady = true;
     }
   }
-  if (s_srvN < sizeof(s_srvCap)) {  // per-arm served-byte capture
+  if (s_srvN < sizeof(s_srvCap)) {  // per-arm consumed-byte capture
     s_srvCap[s_srvN++] = b;
+    s_srvSlot[s_srvN - 1u] = slot;
   }
-  return b;
+  for (uint8_t i = 0; i <= slot; i++) {
+    ne2000_dma_advance(&s_chip);
+  }
+  mdnet_dp_restage();
 }
 
 // Drain the low-latency ROM3 CR tap: for each command-register write, track
@@ -247,11 +261,9 @@ static void __not_in_flash_func(crtap_service)(void) {
         }
         s_dbgRreadSeq++;
         if (s_chip.rsar == 0u && s_chip.rcnt == 32u && !s_promReady) {
-          s_promCap[0] = s_dbgB[0];  // byte 0 = the pre-staged byte
-          s_promIdx = 1;             // subsequent serves append
+          s_promIdx = 0;  // consumed bytes fill the capture
         }
-        s_srvCap[0] = s_dbgB[0];  // per-arm capture: byte 0 = pre-staged
-        s_srvN = 1;
+        s_srvN = 0;  // per-arm capture restarts; consumed bytes fill it
         // Immediate tight-loop serve: pre-stage the stream's first byte,
         // then stay in the burst until the driver moves on. Do NOT flush
         // pending tap events: a first read that raced the arm detection
@@ -261,9 +273,9 @@ static void __not_in_flash_func(crtap_service)(void) {
         // served byte 0 twice. Stale events from the PREVIOUS stream
         // cannot be pending here: the burst drains the tap FIFO before
         // exiting, and between streams the driver only writes registers.
-        dataport_set_byte(ne2000_dma_current(&s_chip));
-        dataport_serve_burst(mdnet_dp_next);
-        dataport_set_byte(ne2000_dma_current(&s_chip));
+        mdnet_dp_restage();
+        dataport_serve_burst(mdnet_dp_consumed);
+        mdnet_dp_restage();
       }
     }
   }
@@ -323,8 +335,8 @@ static void __not_in_flash_func(on_rom3_sample)(uint16_t sample) {
 // re-enter the chip model.
 static void __not_in_flash_func(core1_yield)(void) {
   crtap_service();
-  dataport_service(mdnet_dp_next);
-  dataport_set_byte(ne2000_dma_current(&s_chip));
+  dataport_service(mdnet_dp_consumed);
+  mdnet_dp_restage();
 }
 
 static volatile uint32_t s_core1Loops = 0;  // heartbeat: Core 1 alive?
@@ -345,7 +357,7 @@ static void __not_in_flash_func(mdnet_core1_loop)(void) {
   for (uint32_t i = 0; i < 4096u; i++) {
     s_core1Loops++;
     crtap_service();
-    dataport_service(mdnet_dp_next);
+    dataport_service(mdnet_dp_consumed);
   }
   s_lapUs = time_us_32() - t0;
 
@@ -353,7 +365,7 @@ static void __not_in_flash_func(mdnet_core1_loop)(void) {
   for (;;) {
     s_core1Loops++;
     crtap_service();                       // page flips + read-arm bursts
-    dataport_service(mdnet_dp_next);       // advance the served byte per read
+    dataport_service(mdnet_dp_consumed);       // advance the served byte per read
 
     if (++lap < 64u) {
       continue;
@@ -361,7 +373,7 @@ static void __not_in_flash_func(mdnet_core1_loop)(void) {
     lap = 0;
 
     commemul_poll(on_rom3_sample);         // register + TX-byte writes
-    dataport_set_byte(ne2000_dma_current(&s_chip));  // serve the live byte
+    mdnet_dp_restage();  // serve the live byte
     stage_hot();                           // fast restage of the polled registers
 
     // Deliver at most ONE queued frame per cold lap, straight from the
@@ -521,10 +533,11 @@ void mdnet_poll(void) {
   uint32_t rr = s_dbgRreadSeq;
   if (rr != lastRread) {
     DPRINTF("mdnet: RREAD rsar=%04x rcnt=%u b=%02x %02x %02x %02x "
-            "srv=%02x %02x %02x %02x %02x %02x\n",
+            "srv=%02x %02x %02x %02x %02x %02x k=%u%u%u%u%u%u\n",
             (unsigned)s_dbgRsar, (unsigned)s_dbgRcnt, s_dbgB[0], s_dbgB[1],
             s_dbgB[2], s_dbgB[3], s_srvCap[0], s_srvCap[1], s_srvCap[2],
-            s_srvCap[3], s_srvCap[4], s_srvCap[5]);
+            s_srvCap[3], s_srvCap[4], s_srvCap[5], s_srvSlot[0], s_srvSlot[1],
+            s_srvSlot[2], s_srvSlot[3], s_srvSlot[4], s_srvSlot[5]);
     lastRread = rr;
   }
 
