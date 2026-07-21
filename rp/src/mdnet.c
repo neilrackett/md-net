@@ -43,11 +43,6 @@
 
 static ne2000_t s_chip;
 static volatile bool s_active = false;
-// Set when the CR tap sees a remote-read arm; the Core-1 loop then serves
-// the read in dataport_serve_burst's tight loop (full-loop latency lost
-// against back-to-back m68k reads and duplicated served bytes).
-static volatile bool s_burstPending = false;
-
 // The driver's currently selected register page, tracked low-latency from
 // the ROM3 CR tap so register 7 (ISR in page 0, CURR in page 1) is staged
 // with the right meaning before the driver reads it.
@@ -188,12 +183,20 @@ static void crtap_service(void) {
       uint8_t cr = mdnet_sample_data(addr);
       s_curpage = (uint8_t)((cr >> 6) & 0x03u);
       rom4_bytes()[MDNET_REG_READ_OFFSET(0x07u)] = reg7_value();
-      if (cr & CR_RREAD) {  // remote-DMA read armed: sample what we'll serve
+      if (cr & CR_RREAD) {  // remote-DMA read armed: serve it NOW
         s_dbgRsar = s_chip.rsar;
         s_dbgRcnt = s_chip.rcnt;
         s_dbgB[0] = ne2000_dma_current(&s_chip);
         s_dbgRreadSeq++;
-        s_burstPending = true;  // serve the burst with tight-loop latency
+        // Immediate tight-loop serve: flush tap events left over from the
+        // previous stream, pre-stage the new stream's first byte, then
+        // stay in the burst until the driver moves on. Deferring this to
+        // the main loop let the first reads race the handoff (one
+        // duplicated byte still corrupted the served PROM MAC).
+        dataport_flush();
+        dataport_set_byte(ne2000_dma_current(&s_chip));
+        dataport_serve_burst(mdnet_dp_next);
+        dataport_set_byte(ne2000_dma_current(&s_chip));
       }
     }
   }
@@ -270,14 +273,6 @@ static void __not_in_flash_func(mdnet_core1_loop)(void) {
     dataport_service(mdnet_dp_next);       // advance the served byte per read
     dataport_set_byte(ne2000_dma_current(&s_chip));  // serve the live byte
     stage_hot();                           // fast restage of the polled registers
-
-    // An armed remote read gets a dedicated tight-loop serve so the
-    // staged byte always beats the m68k's next read.
-    if (s_burstPending) {
-      s_burstPending = false;
-      dataport_serve_burst(mdnet_dp_next);
-      dataport_set_byte(ne2000_dma_current(&s_chip));
-    }
 
     // Deliver at most ONE queued frame per iteration, straight from the
     // queue slot (no staging copy); the yield hook keeps the taps live

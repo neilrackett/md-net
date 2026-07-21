@@ -63,6 +63,17 @@ static inline void write_slots(uint8_t b) {
 
 void dataport_set_byte(uint8_t b) { write_slots(b); }
 
+// Discard pending ROM4 tap events. Called at a remote-read arm: events
+// still queued at that moment belong to the PREVIOUS stream (its rsar has
+// just been rewritten), and advancing the new stream for them shifts every
+// subsequently served byte -- the residual single-byte duplication seen in
+// the served PROM MAC.
+void dataport_flush(void) {
+  while (!pio_sm_is_rx_fifo_empty(s_pio, (uint)s_sm)) {
+    (void)pio_sm_get(s_pio, (uint)s_sm);
+  }
+}
+
 // Tight serve for an armed remote read: poll only the ROM4 tap so each
 // data-port read is re-staged within ~200 ns -- the full Core-1 loop's
 // ~1.5 us latency loses against the m68k's back-to-back read pace, which

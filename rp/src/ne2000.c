@@ -331,12 +331,19 @@ bool ne2000_deliver_rx(ne2000_t *chip, const uint8_t *frame, uint16_t len) {
   // re-sync, drain, and advance BNRY. Unread span = CURR - BNRY over the
   // rx ring, so this self-paces: a stalled driver stops us delivering,
   // which is exactly what lets it recover.
-  int unread = (int)chip->curr - (int)chip->bnry;
-  if (unread < 0) {
-    unread += (int)(chip->pstop - chip->pstart);
-  }
-  if (unread > NE2000_RX_PACE_PAGES) {
-    return false;  // paced drop -- let the driver catch up
+  // Only pace against a BNRY that is inside the ring: the driver's
+  // bad-header recovery path writes BNRY=0, and pacing against that
+  // garbage computed a permanently-huge unread span, blocking delivery
+  // forever -- which froze CURR and prevented the very resync (driver
+  // re-reads CURR on a bogus header) that would have recovered it.
+  if (chip->bnry >= chip->pstart && chip->bnry < chip->pstop) {
+    int unread = (int)chip->curr - (int)chip->bnry;
+    if (unread < 0) {
+      unread += (int)(chip->pstop - chip->pstart);
+    }
+    if (unread > NE2000_RX_PACE_PAGES) {
+      return false;  // paced drop -- let the driver catch up
+    }
   }
 
   // Validate the ring registers before touching mem[]: mid-init the
