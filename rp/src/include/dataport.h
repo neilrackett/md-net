@@ -44,5 +44,9 @@ int dataport_crtap_get(uint16_t *addr);
 // Diagnostics: total data-port reads Core 1 has observed since boot (used
 // to confirm the tap is detecting reads on hardware).
 uint32_t dataport_readCount(void);
+// Non-data-port ROM4 read counters (all registers / register 7), so a
+// driver spinning on a register poll is visible on the UART.
+uint32_t dataport_regReadCount(void);
+uint32_t dataport_reg7ReadCount(void);
 
 #endif  // DATAPORT_H

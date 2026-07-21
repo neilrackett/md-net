@@ -395,10 +395,13 @@ void mdnet_poll(void) {
   if (dp != lastDp || rx != lastRx || tx != lastTx ||
       (uint32_t)(nowUs - lastStatsUs) > 2000000u) {
     DPRINTF("mdnet: dp-reads=%lu rx=%lu(drop %lu) tx=%lu(cmd %lu drop %lu) "
-            "c1=%lu\n",
+            "c1=%lu regs=%lu r7=%lu pg=%u v=%02x\n",
             (unsigned long)dp, (unsigned long)rx, (unsigned long)s_rxDropped,
             (unsigned long)tx, (unsigned long)s_txCmd,
-            (unsigned long)s_txDropped, (unsigned long)s_core1Loops);
+            (unsigned long)s_txDropped, (unsigned long)s_core1Loops,
+            (unsigned long)dataport_regReadCount(),
+            (unsigned long)dataport_reg7ReadCount(), (unsigned)s_curpage,
+            reg7_value());
     lastDp = dp;
     lastRx = rx;
     lastTx = tx;

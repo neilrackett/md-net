@@ -42,6 +42,12 @@ static int s_sm = -1;
 static int s_crSm = -1;  // ROM3 command-register tap
 
 static volatile uint32_t s_count = 0;
+// Register-read visibility: the tap samples EVERY ROM4 read, so count the
+// non-data-port ones too -- without this, a driver spinning on a register
+// poll (e.g. waiting on an ISR bit) is indistinguishable from a dead
+// driver, since romemul serves register reads with no RP involvement.
+static volatile uint32_t s_regReads = 0;   // all non-data-port ROM4 reads
+static volatile uint32_t s_reg7Reads = 0;  // reads of register 7 (ISR/CURR)
 
 static inline volatile uint8_t *rom4(void) {
   return (volatile uint8_t *)&__rom_in_ram_start__;
@@ -61,7 +67,12 @@ void dataport_service(uint8_t (*next_byte)(void)) {
   while (!pio_sm_is_rx_fifo_empty(s_pio, (uint)s_sm)) {
     uint32_t word = pio_sm_get(s_pio, (uint)s_sm);
     uint16_t addr = (uint16_t)(word >> 16);
-    if (((addr >> 9) & 0x1Fu) != DP_REG) {
+    uint8_t reg = (uint8_t)((addr >> 9) & 0x1Fu);
+    if (reg != DP_REG) {
+      s_regReads++;
+      if (reg == 0x07u) {
+        s_reg7Reads++;
+      }
       continue;
     }
     s_count++;
@@ -109,3 +120,5 @@ int dataport_crtap_get(uint16_t *addr) {
 }
 
 uint32_t dataport_readCount(void) { return s_count; }
+uint32_t dataport_regReadCount(void) { return s_regReads; }
+uint32_t dataport_reg7ReadCount(void) { return s_reg7Reads; }
