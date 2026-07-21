@@ -271,6 +271,9 @@ static void ring_write(ne2000_t *chip, uint16_t *off, const uint8_t *src,
   uint16_t o = *off;
   while (n > 0u) {
     uint16_t chunk = (uint16_t)(high - o);
+    if (chunk == 0u) {
+      break;  // inconsistent ring state -- never spin here
+    }
     if (chunk > n) {
       chunk = n;
     }
@@ -334,6 +337,16 @@ bool ne2000_deliver_rx(ne2000_t *chip, const uint8_t *frame, uint16_t len) {
   }
   if (unread > NE2000_RX_PACE_PAGES) {
     return false;  // paced drop -- let the driver catch up
+  }
+
+  // Validate the ring registers before touching mem[]: mid-init the
+  // driver rewrites PSTART/PSTOP/CURR one register at a time, and a frame
+  // delivered inside that window would otherwise index outside the ring
+  // (out-of-bounds write) or spin ring_write on a zero-size ring.
+  if (chip->pstart < NE2000_RING_FIRST_PAGE || chip->pstop > NE2000_STOP_PAGE ||
+      chip->pstart >= chip->pstop || chip->curr < chip->pstart ||
+      chip->curr >= chip->pstop) {
+    return false;  // transient/garbage ring registers -- drop
   }
 
   uint8_t start_page = chip->curr;

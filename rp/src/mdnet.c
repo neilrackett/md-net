@@ -248,10 +248,13 @@ static void __not_in_flash_func(core1_yield)(void) {
   dataport_set_byte(ne2000_dma_current(&s_chip));
 }
 
+static volatile uint32_t s_core1Loops = 0;  // heartbeat: Core 1 alive?
+
 static void __not_in_flash_func(mdnet_core1_loop)(void) {
   static uint8_t txbuf[NE2000_MTU];
   ne2000_set_yield(core1_yield);
   for (;;) {
+    s_core1Loops++;
     // CR tap first, every iteration: flip register 7's page with minimal
     // latency so it's correct before the driver's next read. Then the full
     // command-bus drain (chip state), the data-port serve, and the fast
@@ -382,17 +385,24 @@ void mdnet_poll(void) {
     }
   }
 
-  // Periodic stats so the bridge can be watched on hardware.
-  static uint32_t lastDp = 0, lastRx = 0, lastTx = 0;
+  // Periodic stats so the bridge can be watched on hardware. Also printed
+  // on a 2 s timer even with no counter movement, with the Core-1 loop
+  // heartbeat -- so a hang (frozen c1) is distinguishable from a silent
+  // bus (c1 climbing, counters still).
+  static uint32_t lastDp = 0, lastRx = 0, lastTx = 0, lastStatsUs = 0;
   uint32_t dp = dataport_readCount(), rx = s_rxDelivered, tx = s_txSent;
-  if (dp != lastDp || rx != lastRx || tx != lastTx) {
-    DPRINTF("mdnet: dp-reads=%lu rx=%lu(drop %lu) tx=%lu(cmd %lu drop %lu)\n",
+  uint32_t nowUs = time_us_32();
+  if (dp != lastDp || rx != lastRx || tx != lastTx ||
+      (uint32_t)(nowUs - lastStatsUs) > 2000000u) {
+    DPRINTF("mdnet: dp-reads=%lu rx=%lu(drop %lu) tx=%lu(cmd %lu drop %lu) "
+            "c1=%lu\n",
             (unsigned long)dp, (unsigned long)rx, (unsigned long)s_rxDropped,
             (unsigned long)tx, (unsigned long)s_txCmd,
-            (unsigned long)s_txDropped);
+            (unsigned long)s_txDropped, (unsigned long)s_core1Loops);
     lastDp = dp;
     lastRx = rx;
     lastTx = tx;
+    lastStatsUs = nowUs;
   }
 
   // Sample the most recent remote-DMA read the driver armed. rcnt=4 is a
