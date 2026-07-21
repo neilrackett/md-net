@@ -252,7 +252,37 @@ static void on_rom3_sample(uint16_t sample);  // defined below
 static void __not_in_flash_func(crtap_service)(void) {
   uint16_t addr;
   while (dataport_crtap_get(&addr)) {
-    if (mdnet_sample_reg(addr) == 0x00u) {  // command-register write
+    uint8_t reg = mdnet_sample_reg(addr);
+    // RSAR/RCNT are tracked HERE, in true bus order, not via commemul:
+    // the driver writes them only a few bus cycles before the read arm,
+    // and commemul's latency put our window prestage in a photo-finish
+    // with the driver's first read -- when the read won, the m68k got a
+    // leftover byte of the previous window (invisible to the srv capture,
+    // which logs the post-prestage bookkeeping). Staging at the RSARHI
+    // write instead gives ~4-6 us of margin. Page-gated: in page 1 these
+    // registers are MAR0-3. commemul skips them (re-applying later would
+    // rewind an advancing RSAR mid-stream).
+    if (s_curpage == 0u && reg >= 0x08u && reg <= 0x0Bu) {
+      uint8_t d = mdnet_sample_data(addr);
+      mdnet_trace_evt((uint16_t)(((uint16_t)reg << 8) | d));
+      switch (reg) {
+        case 0x08u:
+          s_chip.rsar = (uint16_t)((s_chip.rsar & 0xFF00u) | d);
+          break;
+        case 0x09u:
+          s_chip.rsar = (uint16_t)((s_chip.rsar & 0x00FFu) | ((uint16_t)d << 8));
+          mdnet_dp_restage();  // RSAR complete: window ready BEFORE the arm
+          break;
+        case 0x0Au:
+          s_chip.rcnt = (uint16_t)((s_chip.rcnt & 0xFF00u) | d);
+          break;
+        default:  // 0x0B
+          s_chip.rcnt = (uint16_t)((s_chip.rcnt & 0x00FFu) | ((uint16_t)d << 8));
+          break;
+      }
+      continue;
+    }
+    if (reg == 0x00u) {  // command-register write
       uint8_t cr = mdnet_sample_data(addr);
       mdnet_trace_evt((uint16_t)cr);  // write event, reg 0
       s_curpage = (uint8_t)((cr >> 6) & 0x03u);
@@ -318,6 +348,10 @@ static void __not_in_flash_func(stage_hot)(void) {
 static void __not_in_flash_func(on_rom3_sample)(uint16_t sample) {
   uint8_t reg = mdnet_sample_reg(sample);
   uint8_t data = mdnet_sample_data(sample);
+  if (s_curpage == 0u && reg >= 0x08u && reg <= 0x0Bu) {
+    return;  // RSAR/RCNT are crtap-owned (see crtap_service): re-applying
+             // them here would rewind a stream that has since advanced
+  }
   if (reg != 0x00u && reg != 0x10u) {  // CR traced at crtap; data port too chatty
     mdnet_trace_evt((uint16_t)(((uint16_t)reg << 8) | data));
   }
