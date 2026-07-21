@@ -30,11 +30,12 @@
 #define REG_DATAPORT 0x10u
 #define REG_RESET 0x1Fu
 
-// Remote-DMA address map of a standard NE2000: the 32-byte station-address
-// PROM at 0x0000, the 16 KB buffer RAM at 0x4000..0x7FFF (pages
-// 0x40..0x7F). The driver reads the PROM at probe (RSAR=0) and the ring
-// after init.
-#define DMA_BUFFER_BASE (NE2000_RING_FIRST_PAGE * NE2000_PAGE_SIZE)  // 0x4000
+// Remote-DMA address map: the 32-byte station-address PROM at 0x0000 and
+// the buffer RAM at 0x2000..0x7FFF (pages 0x20..0x7F) -- wide enough for
+// both the NE2000 (0x40+) and NE1000-fallback (0x20+) layouts the driver
+// can pick at probe time (see NE2000_RING_FIRST_PAGE in ne2000.h). The
+// driver reads the PROM at probe (RSAR=0) and the ring after init.
+#define DMA_BUFFER_BASE (NE2000_RING_FIRST_PAGE * NE2000_PAGE_SIZE)  // 0x2000
 #define DMA_BUFFER_END (NE2000_STOP_PAGE * NE2000_PAGE_SIZE)         // 0x8000
 
 void ne2000_reset(ne2000_t *chip, const uint8_t mac[6]) {

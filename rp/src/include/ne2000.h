@@ -26,9 +26,15 @@
 #define NE2000_TX_START_PAGE 0x40u  // NESM_START_PG
 #define NE2000_RX_START_PAGE 0x46u  // tx start + TX_PAGES (6)
 #define NE2000_STOP_PAGE 0x80u      // NESM_STOP_PG
-#define NE2000_RING_FIRST_PAGE NE2000_TX_START_PAGE
-#define NE2000_RING_PAGES (NE2000_STOP_PAGE - NE2000_RING_FIRST_PAGE)  // 64
-#define NE2000_RING_BYTES (NE2000_RING_PAGES * NE2000_PAGE_SIZE)       // 16 KB
+// The buffer window starts at page $20, not $40: the driver family picks
+// its personality from the probe -- a properly-doubled PROM configures
+// the 16-bit NE2000 layout (tx $40, ring $46+), but any imperfection
+// falls back to the 8-bit NE1000 layout (tx $20, ring $26+). Covering
+// $2000-$7FFF makes BOTH personalities fully functional instead of the
+// fallback silently dropping everything.
+#define NE2000_RING_FIRST_PAGE 0x20u
+#define NE2000_RING_PAGES (NE2000_STOP_PAGE - NE2000_RING_FIRST_PAGE)  // 96
+#define NE2000_RING_BYTES (NE2000_RING_PAGES * NE2000_PAGE_SIZE)       // 24 KB
 
 // The MAC PROM the driver reads during probe: 32 bytes, each of the 6 MAC
 // bytes doubled, with the NE2000 signature $57 at PROM[14] and PROM[15].

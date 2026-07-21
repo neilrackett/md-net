@@ -85,6 +85,12 @@ static volatile uint32_t s_dbgWrArmSeq = 0;   // RWRITE arms seen
 static volatile uint16_t s_dbgWrRsar = 0, s_dbgWrRcnt = 0;  // at arm time
 static volatile uint16_t s_dbgWr[4][2];       // first 4 writes: {rsar, data}
 static volatile uint8_t s_dbgWrN = 0xFFu;     // capture cursor (0xFF = idle)
+// Served-PROM capture: record the exact byte sequence served for a
+// PROM-shaped remote read (rsar=0, rcnt=32) so serve quality is directly
+// visible instead of inferred from which layout the driver picks.
+static volatile uint8_t s_promCap[16];
+static volatile uint8_t s_promIdx = 0xFFu;    // 0xFF = idle; else fill index
+static volatile bool s_promReady = false;
 
 static bool rxq_push(const uint8_t *f, uint16_t len) {
   uint16_t h = s_rxq.head;
@@ -169,7 +175,14 @@ static uint8_t reg7_value(void) {
 // from the register path is reflected before the ST reads.
 static uint8_t __not_in_flash_func(mdnet_dp_next)(void) {
   ne2000_dma_advance(&s_chip);
-  return ne2000_dma_current(&s_chip);
+  uint8_t b = ne2000_dma_current(&s_chip);
+  if (s_promIdx < sizeof(s_promCap)) {  // PROM-serve capture (see above)
+    s_promCap[s_promIdx++] = b;
+    if (s_promIdx == sizeof(s_promCap)) {
+      s_promReady = true;
+    }
+  }
+  return b;
 }
 
 // Drain the low-latency ROM3 CR tap: for each command-register write, track
@@ -194,6 +207,10 @@ static void __not_in_flash_func(crtap_service)(void) {
         s_dbgRcnt = s_chip.rcnt;
         s_dbgB[0] = ne2000_dma_current(&s_chip);
         s_dbgRreadSeq++;
+        if (s_chip.rsar == 0u && s_chip.rcnt == 32u && !s_promReady) {
+          s_promCap[0] = s_dbgB[0];  // byte 0 = the pre-staged byte
+          s_promIdx = 1;             // subsequent serves append
+        }
         // Immediate tight-loop serve: pre-stage the stream's first byte,
         // then stay in the burst until the driver moves on. Do NOT flush
         // pending tap events: a first read that raced the arm detection
@@ -444,6 +461,19 @@ void mdnet_poll(void) {
     DPRINTF("mdnet: RREAD rsar=%04x rcnt=%u b0=%02x\n", (unsigned)s_dbgRsar,
             (unsigned)s_dbgRcnt, s_dbgB[0]);
     lastRread = rr;
+  }
+
+  // Served-PROM trace: the exact first 16 bytes handed to the driver's
+  // probe read. Correct = the doubled MAC (28 28 cd cd c1 c1 10 10 ...).
+  static bool promPrinted = false;
+  if (s_promReady && !promPrinted) {
+    promPrinted = true;
+    DPRINTF("mdnet: PROM served [%02x %02x %02x %02x %02x %02x %02x %02x "
+            "%02x %02x %02x %02x %02x %02x %02x %02x]\n",
+            s_promCap[0], s_promCap[1], s_promCap[2], s_promCap[3],
+            s_promCap[4], s_promCap[5], s_promCap[6], s_promCap[7],
+            s_promCap[8], s_promCap[9], s_promCap[10], s_promCap[11],
+            s_promCap[12], s_promCap[13], s_promCap[14], s_promCap[15]);
   }
 
   // Remote-WRITE trace: where the driver armed the write and where its
