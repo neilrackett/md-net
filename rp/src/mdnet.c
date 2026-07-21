@@ -91,6 +91,10 @@ static volatile uint8_t s_dbgWrN = 0xFFu;     // capture cursor (0xFF = idle)
 static volatile uint8_t s_promCap[16];
 static volatile uint8_t s_promIdx = 0xFFu;    // 0xFF = idle; else fill index
 static volatile bool s_promReady = false;
+// Hot-lap timing: microseconds for 4096 hot laps, sampled once Core 1 is
+// running. ~1.4M laps/2s has been constant across major loop rewrites --
+// something invisible costs ~300 cycles/lap and must be measured.
+static volatile uint32_t s_lapUs = 0;
 
 static bool rxq_push(const uint8_t *f, uint16_t len) {
   uint16_t h = s_rxq.head;
@@ -295,6 +299,16 @@ static void __not_in_flash_func(mdnet_core1_loop)(void) {
   // the first reads after an arm must never race the servicing. The
   // slower work (commemul drain, register restage, RX delivery, TX
   // handoff) runs every 64th lap.
+  // One-shot hot-lap timing: measure 4096 pure hot laps shortly after
+  // start (before any bus traffic) to pin down the per-lap cost.
+  uint32_t t0 = time_us_32();
+  for (uint32_t i = 0; i < 4096u; i++) {
+    s_core1Loops++;
+    crtap_service();
+    dataport_service(mdnet_dp_next);
+  }
+  s_lapUs = time_us_32() - t0;
+
   uint32_t lap = 0;
   for (;;) {
     s_core1Loops++;
@@ -474,6 +488,13 @@ void mdnet_poll(void) {
             s_promCap[4], s_promCap[5], s_promCap[6], s_promCap[7],
             s_promCap[8], s_promCap[9], s_promCap[10], s_promCap[11],
             s_promCap[12], s_promCap[13], s_promCap[14], s_promCap[15]);
+    DPRINTF("mdnet: lap4096=%luus dp-addrs [%03x %03x %03x %03x %03x %03x "
+            "%03x %03x]\n",
+            (unsigned long)s_lapUs, dataport_addrCap(0) & 0x1FFu,
+            dataport_addrCap(1) & 0x1FFu, dataport_addrCap(2) & 0x1FFu,
+            dataport_addrCap(3) & 0x1FFu, dataport_addrCap(4) & 0x1FFu,
+            dataport_addrCap(5) & 0x1FFu, dataport_addrCap(6) & 0x1FFu,
+            dataport_addrCap(7) & 0x1FFu);
   }
 
   // Remote-WRITE trace: where the driver armed the write and where its

@@ -55,4 +55,8 @@ void dataport_serve_burst(uint8_t (*next_byte)(void));
 uint32_t dataport_regReadCount(void);
 uint32_t dataport_reg7ReadCount(void);
 
+// First captured data-port read addresses (diagnostic; see dataport.c).
+uint8_t dataport_addrCapCount(void);
+uint16_t dataport_addrCap(uint8_t i);
+
 #endif  // DATAPORT_H
