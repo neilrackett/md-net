@@ -77,6 +77,14 @@ static volatile uint32_t s_txCmd = 0;  // CR=TRANS commands the driver issued
 static volatile uint16_t s_dbgRsar = 0, s_dbgRcnt = 0;
 static volatile uint8_t s_dbgB[4] = {0, 0, 0, 0};
 static volatile uint32_t s_dbgRreadSeq = 0;
+// Remote-WRITE diagnostics: the TX frame arrives via data-port writes but
+// reaches the WiFi all-zero, so capture where the driver's first written
+// bytes actually land -- (rsar, data) pairs latched at each RWRITE arm.
+static volatile uint32_t s_dpWrites = 0;      // total data-port writes seen
+static volatile uint32_t s_dbgWrArmSeq = 0;   // RWRITE arms seen
+static volatile uint16_t s_dbgWrRsar = 0, s_dbgWrRcnt = 0;  // at arm time
+static volatile uint16_t s_dbgWr[4][2];       // first 4 writes: {rsar, data}
+static volatile uint8_t s_dbgWrN = 0xFFu;     // capture cursor (0xFF = idle)
 
 static bool rxq_push(const uint8_t *f, uint16_t len) {
   uint16_t h = s_rxq.head;
@@ -199,6 +207,21 @@ static void stage_hot(void) {
 static void on_rom3_sample(uint16_t sample) {
   uint8_t reg = mdnet_sample_reg(sample);
   uint8_t data = mdnet_sample_data(sample);
+  // Latch write-path diagnostics BEFORE the model consumes the sample, so
+  // the recorded rsar is the address this write will actually land at.
+  if (reg == 0x10u) {
+    s_dpWrites++;
+    if (s_dbgWrN < 4u) {
+      s_dbgWr[s_dbgWrN][0] = s_chip.rsar;
+      s_dbgWr[s_dbgWrN][1] = data;
+      s_dbgWrN++;
+    }
+  } else if (reg == 0x00u && (data & 0x38u) == 0x10u) {  // CR: remote WRITE
+    s_dbgWrRsar = s_chip.rsar;  // as commemul ordered it -- RSAR set precedes
+    s_dbgWrRcnt = s_chip.rcnt;
+    s_dbgWrN = 0;  // start capturing the next 4 data-port writes
+    s_dbgWrArmSeq++;
+  }
   ne2000_reg_write(&s_chip, reg, data);
   if (reg == 0x00u && (data & CR_TRANS)) {
     s_txCmd++;  // the driver asked the chip to transmit (e.g. an ARP reply)
@@ -363,5 +386,19 @@ void mdnet_poll(void) {
     DPRINTF("mdnet: RREAD rsar=%04x rcnt=%u b0=%02x\n", (unsigned)s_dbgRsar,
             (unsigned)s_dbgRcnt, s_dbgB[0]);
     lastRread = rr;
+  }
+
+  // Remote-WRITE trace: where the driver armed the write and where its
+  // first 4 data-port bytes actually landed. Logged once the capture
+  // fills (or on the next arm if fewer than 4 writes followed).
+  static uint32_t lastWrArm = 0;
+  if (s_dbgWrArmSeq != lastWrArm && s_dbgWrN >= 4u && s_dbgWrN != 0xFFu) {
+    DPRINTF("mdnet: WWRITE arm rsar=%04x rcnt=%u wr=%lu [%04x=%02x %04x=%02x "
+            "%04x=%02x %04x=%02x]\n",
+            (unsigned)s_dbgWrRsar, (unsigned)s_dbgWrRcnt,
+            (unsigned long)s_dpWrites, s_dbgWr[0][0], s_dbgWr[0][1],
+            s_dbgWr[1][0], s_dbgWr[1][1], s_dbgWr[2][0], s_dbgWr[2][1],
+            s_dbgWr[3][0], s_dbgWr[3][1]);
+    lastWrArm = s_dbgWrArmSeq;
   }
 }
