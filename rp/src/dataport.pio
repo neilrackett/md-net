@@ -17,13 +17,21 @@
 
 .program dataport_read
 
+; The event is pushed at cycle END, not start: Core 1 restages the next
+; byte within ~300 ns of the event, and an event delivered at cycle START
+; let that restage race the romemul DMA fetch for the SAME cycle -- the
+; m68k then read byte N+1 instead of N, shifting whole header reads by
+; one (status became the next-page byte, so the driver rejected perfect
+; packets). Sampling mid-cycle but pushing after deassert guarantees the
+; restage lands in the dead time between cycles.
 .wrap_target
     wait 0 gpio DATAPORT_ROM4_GPIO             ; ROM4 asserted (active low)
     nop                              [DATAPORT_SAFE_WAIT]
     nop                              [DATAPORT_SAFE_WAIT]
     nop                              [DATAPORT_SAFE_WAIT]
-    in pins, DATAPORT_BUS_PINS                 ; autopush the address to RX FIFO
-    wait 1 gpio DATAPORT_ROM4_GPIO             ; wait for the cycle to end
+    in pins, DATAPORT_BUS_PINS                 ; sample the address (no autopush)
+    wait 1 gpio DATAPORT_ROM4_GPIO             ; cycle end
+    push noblock                               ; deliver the event AFTER the cycle
 .wrap
 
 ; Same read-only tap, but on ROM3 (register/data-port WRITES, which are
@@ -34,13 +42,17 @@
 ; commemul's READ enable; never drives the bus.
 .program crtap_read
 
+; Same cycle-end delivery as dataport_read: acting on a CR write (page
+; flip, read-arm burst entry) mid-cycle is never useful and only risks
+; racing the cycle still in flight.
 .wrap_target
     wait 0 gpio DATAPORT_ROM3_GPIO             ; ROM3 asserted (active low)
     nop                              [DATAPORT_SAFE_WAIT]
     nop                              [DATAPORT_SAFE_WAIT]
     nop                              [DATAPORT_SAFE_WAIT]
-    in pins, DATAPORT_BUS_PINS                 ; autopush the address to RX FIFO
-    wait 1 gpio DATAPORT_ROM3_GPIO             ; wait for the cycle to end
+    in pins, DATAPORT_BUS_PINS                 ; sample the address (no autopush)
+    wait 1 gpio DATAPORT_ROM3_GPIO             ; cycle end
+    push noblock                               ; deliver the event AFTER the cycle
 .wrap
 
 % c-sdk {
@@ -54,7 +66,7 @@ static inline void dataport_read_program_init(PIO pio, uint sm, uint offset,
     // Shift right + autopush at the full bus width, exactly like
     // commemul_read: the sampled address ends up in the upper 16 bits of
     // the pushed word with A_i at bit i.
-    sm_config_set_in_shift(&c, true, true, addr_pin_count);
+    sm_config_set_in_shift(&c, true, false, addr_pin_count);  // explicit push at cycle end
     // This SM never transmits, so join both FIFOs into an 8-deep RX FIFO
     // for burst tolerance while Core 1 is servicing something else.
     sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_RX);
@@ -68,7 +80,7 @@ static inline void crtap_read_program_init(PIO pio, uint sm, uint offset,
                                            uint addr_pin_count, float div) {
     pio_sm_config c = crtap_read_program_get_default_config(offset);
     sm_config_set_in_pins(&c, addr_pin_base);
-    sm_config_set_in_shift(&c, true, true, addr_pin_count);
+    sm_config_set_in_shift(&c, true, false, addr_pin_count);  // explicit push at cycle end
     sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_RX);  // RX-only: 8-deep FIFO
     sm_config_set_clkdiv(&c, div);
     pio_sm_init(pio, sm, offset, &c);
