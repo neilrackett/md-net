@@ -210,6 +210,17 @@ static void __not_in_flash_func(crtap_service)(void) {
         s_dbgRsar = s_chip.rsar;
         s_dbgRcnt = s_chip.rcnt;
         s_dbgB[0] = ne2000_dma_current(&s_chip);
+        // Peek the next 3 bytes too (read-only; rsar untouched): for a
+        // body read at offset 16 these are the ethertype + first payload
+        // byte -- identifies WHAT the driver is reading (0806 ARP / 0800
+        // IP) without disturbing the serve.
+        for (uint8_t k = 1; k < 4u; k++) {
+          uint16_t a = (uint16_t)(s_chip.rsar + k);
+          s_dbgB[k] = (a < 32u) ? s_chip.prom[a]
+                                : ((a >= 0x2000u && a < 0x8000u)
+                                       ? s_chip.mem[a - 0x2000u]
+                                       : 0u);
+        }
         s_dbgRreadSeq++;
         if (s_chip.rsar == 0u && s_chip.rcnt == 32u && !s_promReady) {
           s_promCap[0] = s_dbgB[0];  // byte 0 = the pre-staged byte
@@ -364,14 +375,22 @@ static err_t mdnet_netif_input(struct pbuf *p, struct netif *inp) {
     // who-has reaching the NE2000 queue. Rate-limited to ~2/s -- this runs
     // in the Core-0 netif path and a blocking UART write per ARP (LAN ARP
     // is chatty) would stall frame intake.
-    if (len >= 42u && rxbuf[12] == 0x08u && rxbuf[13] == 0x06u &&
-        rxbuf[21] == 0x01u) {
-      static uint32_t s_lastArpLog;
-      uint32_t now = time_us_32();
-      if (now - s_lastArpLog > 500000u) {
-        s_lastArpLog = now;
-        DPRINTF("mdnet: ARP who-has %u.%u.%u.%u\n", rxbuf[38], rxbuf[39],
-                rxbuf[40], rxbuf[41]);
+    if (len >= 42u && rxbuf[12] == 0x08u && rxbuf[13] == 0x06u) {
+      if (rxbuf[21] == 0x02u) {
+        // ARP reply -- the packet STinG must receive to resolve a peer.
+        // Never rate-limited: replies are rare and each one matters.
+        DPRINTF("mdnet: ARP reply %u.%u.%u.%u is-at "
+                "%02x:%02x:%02x:%02x:%02x:%02x\n",
+                rxbuf[28], rxbuf[29], rxbuf[30], rxbuf[31], rxbuf[22],
+                rxbuf[23], rxbuf[24], rxbuf[25], rxbuf[26], rxbuf[27]);
+      } else if (rxbuf[21] == 0x01u) {
+        static uint32_t s_lastArpLog;
+        uint32_t now = time_us_32();
+        if (now - s_lastArpLog > 500000u) {
+          s_lastArpLog = now;
+          DPRINTF("mdnet: ARP who-has %u.%u.%u.%u\n", rxbuf[38], rxbuf[39],
+                  rxbuf[40], rxbuf[41]);
+        }
       }
     }
     if (!rxq_push(rxbuf, len)) {
@@ -472,8 +491,9 @@ void mdnet_poll(void) {
   static uint32_t lastRread = 0;
   uint32_t rr = s_dbgRreadSeq;
   if (rr != lastRread) {
-    DPRINTF("mdnet: RREAD rsar=%04x rcnt=%u b0=%02x\n", (unsigned)s_dbgRsar,
-            (unsigned)s_dbgRcnt, s_dbgB[0]);
+    DPRINTF("mdnet: RREAD rsar=%04x rcnt=%u b=%02x %02x %02x %02x\n",
+            (unsigned)s_dbgRsar, (unsigned)s_dbgRcnt, s_dbgB[0], s_dbgB[1],
+            s_dbgB[2], s_dbgB[3]);
     lastRread = rr;
   }
 
