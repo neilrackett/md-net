@@ -331,20 +331,14 @@ bool ne2000_deliver_rx(ne2000_t *chip, const uint8_t *frame, uint16_t len) {
   // re-sync, drain, and advance BNRY. Unread span = CURR - BNRY over the
   // rx ring, so this self-paces: a stalled driver stops us delivering,
   // which is exactly what lets it recover.
-  // Only pace against a BNRY that is inside the ring: the driver's
-  // bad-header recovery path writes BNRY=0, and pacing against that
-  // garbage computed a permanently-huge unread span, blocking delivery
-  // forever -- which froze CURR and prevented the very resync (driver
-  // re-reads CURR on a bogus header) that would have recovered it.
-  if (chip->bnry >= chip->pstart && chip->bnry < chip->pstop) {
-    int unread = (int)chip->curr - (int)chip->bnry;
-    if (unread < 0) {
-      unread += (int)(chip->pstop - chip->pstart);
-    }
-    if (unread > NE2000_RX_PACE_PAGES) {
-      return false;  // paced drop -- let the driver catch up
-    }
-  }
+  // No delivery pacing: it was a workaround for the register-7 page-flip
+  // race (since fixed properly by the deterministic tap serve) and it
+  // deadlocked twice -- once against the driver's BNRY=0 recovery value,
+  // once against a CURR/BNRY wrap desync after a stale-header walk. In
+  // both cases the driver was waiting for ISR_RX while pacing waited for
+  // the driver, dropping every frame (including the first echo replies
+  // this bridge ever received). The ring-full check below provides the
+  // real 8390 overrun semantics.
 
   // Validate the ring registers before touching mem[]: mid-init the
   // driver rewrites PSTART/PSTOP/CURR one register at a time, and a frame

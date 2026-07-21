@@ -36,13 +36,6 @@
 
 #define NE2000_MTU 1518u  // 6+6+2+1500+4(CRC); driver rejects longer frames
 
-// RX pacing: hold off delivering once the ring already carries this many
-// unread pages, so CURR stays still long enough for the driver's re-read
-// to agree and it can drain without wandering below the ring. ~8 pages =
-// one max-size frame or several small ones -- enough not to stall a
-// draining driver, tight enough to keep CURR from churning.
-#define NE2000_RX_PACE_PAGES 8
-
 // Interrupt status/mask bits (EN0_ISR / EN0_IMR) used by the model.
 #define NE2000_ISR_RX 0x01u     // packet received, no error (ENISR_RX)
 #define NE2000_ISR_TX 0x02u     // packet transmitted (ENISR_TX)
