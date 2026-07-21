@@ -97,12 +97,20 @@ static volatile bool s_promReady = false;
 // corruption on header reads (invisible to a memory peek).
 static volatile uint8_t s_srvCap[6];
 static volatile uint8_t s_srvN = 0xFFu;
-// Command-register write trace: every CR value the driver writes, in
-// order. The skip-vs-accept question reduces to whether a header arm
-// (CR=$0A) is followed by a second $0A (rtrvPckt's body arm) -- the
-// dynamic sequence settles what the static disassembly cannot.
-static volatile uint8_t s_crSeq[48];
-static volatile uint8_t s_crN = 0;
+// Unified bus-event trace: register WRITES (from commemul, reg+data) and
+// register READS (from the ROM4 tap, reg+the value staged at that
+// moment). Data-port traffic excluded (too chatty). Encoding:
+// bit15=read, bits8-12=reg, bits0-7=data/value. The driver's entire
+// decision context -- ISR values seen, CURR values seen, TSR after TX,
+// every command -- becomes visible in order.
+static volatile uint16_t s_evtSeq[40];
+static volatile uint8_t s_evtN = 0;
+
+void __not_in_flash_func(mdnet_trace_evt)(uint16_t evt) {
+  if (s_evtN < (sizeof(s_evtSeq) / sizeof(s_evtSeq[0]))) {
+    s_evtSeq[s_evtN++] = evt;
+  }
+}
 // Hot-lap timing: microseconds for 4096 hot laps, sampled once Core 1 is
 // running. ~1.4M laps/2s has been constant across major loop rewrites --
 // something invisible costs ~300 cycles/lap and must be measured.
@@ -215,9 +223,7 @@ static void __not_in_flash_func(crtap_service)(void) {
   while (dataport_crtap_get(&addr)) {
     if (mdnet_sample_reg(addr) == 0x00u) {  // command-register write
       uint8_t cr = mdnet_sample_data(addr);
-      if (s_crN < sizeof(s_crSeq)) {
-        s_crSeq[s_crN++] = cr;  // CR-sequence trace
-      }
+      mdnet_trace_evt((uint16_t)cr);  // write event, reg 0
       s_curpage = (uint8_t)((cr >> 6) & 0x03u);
       rom4_bytes()[MDNET_REG_READ_OFFSET(0x07u)] = reg7_value();
       if (cr & CR_RREAD) {  // remote-DMA read armed: serve it NOW
@@ -283,6 +289,9 @@ static void __not_in_flash_func(stage_hot)(void) {
 static void __not_in_flash_func(on_rom3_sample)(uint16_t sample) {
   uint8_t reg = mdnet_sample_reg(sample);
   uint8_t data = mdnet_sample_data(sample);
+  if (reg != 0x00u && reg != 0x10u) {  // CR traced at crtap; data port too chatty
+    mdnet_trace_evt((uint16_t)(((uint16_t)reg << 8) | data));
+  }
   // Latch write-path diagnostics BEFORE the model consumes the sample, so
   // the recorded rsar is the address this write will actually land at.
   if (reg == 0x10u) {
@@ -539,18 +548,19 @@ void mdnet_poll(void) {
             dataport_addrCap(7) & 0x1FFu);
   }
 
-  // CR-sequence trace: dump and reset when the buffer has content. The
-  // per-packet fingerprint of interest: 62 22 0a 22 (header only, skip)
-  // vs 62 22 0a 22 0a 22 (header + rtrvPckt body arm, accept).
-  if (s_crN >= 12u) {
-    char line[3 * sizeof(s_crSeq) + 1];
-    uint8_t n = s_crN;
+  // Unified event-trace dump: Rrr=vv for register reads (value staged at
+  // read time), Wrr=dd for writes. The driver's full decision context.
+  if (s_evtN >= 20u) {
+    char line[7 * (sizeof(s_evtSeq) / sizeof(s_evtSeq[0])) + 1];
+    uint8_t n = s_evtN;
     for (uint8_t i = 0; i < n; i++) {
-      snprintf(&line[3 * i], 4, "%02x ", s_crSeq[i]);
+      uint16_t e = s_evtSeq[i];
+      snprintf(&line[7 * i], 8, "%c%02x=%02x ", (e & 0x8000u) ? 'R' : 'W',
+               (unsigned)((e >> 8) & 0x1Fu), (unsigned)(e & 0xFFu));
     }
-    line[3 * n] = '\0';
-    s_crN = 0;
-    DPRINTF("mdnet: CRs %s\n", line);
+    line[7 * n] = '\0';
+    s_evtN = 0;
+    DPRINTF("mdnet: TRC %s\n", line);
   }
 
   // Remote-WRITE trace: where the driver armed the write and where its

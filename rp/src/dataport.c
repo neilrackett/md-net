@@ -55,6 +55,20 @@ static volatile uint32_t s_reg7Reads = 0;  // reads of register 7 (ISR/CURR)
 static volatile uint16_t s_addrCap[8];
 static volatile uint8_t s_addrN = 0;
 
+static inline volatile uint8_t *rom4(void) {
+  return (volatile uint8_t *)&__rom_in_ram_start__;
+}
+
+// Unified bus-event trace hook (lives in mdnet.c): reads are reported
+// with the value STAGED at the moment of the read.
+extern void mdnet_trace_evt(uint16_t evt);
+
+static inline void dataport_note_reg_read(uint8_t reg) {
+  volatile uint8_t *r = rom4();
+  uint8_t v = r[((uint16_t)reg << 9) ^ 1u];  // staged value (cart byte-swap)
+  mdnet_trace_evt((uint16_t)(0x8000u | ((uint16_t)reg << 8) | v));
+}
+
 static inline void dataport_note_addr(uint16_t addr) {
   if (s_addrN < 8u) {
     s_addrCap[s_addrN] = addr;
@@ -64,10 +78,6 @@ static inline void dataport_note_addr(uint16_t addr) {
 
 uint8_t dataport_addrCapCount(void) { return s_addrN; }
 uint16_t dataport_addrCap(uint8_t i) { return s_addrCap[i & 7u]; }
-
-static inline volatile uint8_t *rom4(void) {
-  return (volatile uint8_t *)&__rom_in_ram_start__;
-}
 
 static inline void write_slots(uint8_t b) {
   volatile uint8_t *r = rom4();
@@ -103,6 +113,7 @@ void __not_in_flash_func(dataport_serve_burst)(uint8_t (*next_byte)(void)) {
       if (reg == 0x07u) {
         s_reg7Reads++;
       }
+      dataport_note_reg_read(reg);
     }
     if (!pio_sm_is_rx_fifo_empty(s_pio, (uint)s_crSm)) {
       break;  // command-register activity: return to the full loop
@@ -121,6 +132,7 @@ void __not_in_flash_func(dataport_service)(uint8_t (*next_byte)(void)) {
       if (reg == 0x07u) {
         s_reg7Reads++;
       }
+      dataport_note_reg_read(reg);
       continue;
     }
     s_count++;
