@@ -188,12 +188,15 @@ static void crtap_service(void) {
         s_dbgRcnt = s_chip.rcnt;
         s_dbgB[0] = ne2000_dma_current(&s_chip);
         s_dbgRreadSeq++;
-        // Immediate tight-loop serve: flush tap events left over from the
-        // previous stream, pre-stage the new stream's first byte, then
-        // stay in the burst until the driver moves on. Deferring this to
-        // the main loop let the first reads race the handoff (one
-        // duplicated byte still corrupted the served PROM MAC).
-        dataport_flush();
+        // Immediate tight-loop serve: pre-stage the stream's first byte,
+        // then stay in the burst until the driver moves on. Do NOT flush
+        // pending tap events: a first read that raced the arm detection
+        // already consumed the correct byte 0 (the main loop stages from
+        // RSAR as soon as it's written, before the CR arm), and its
+        // queued event must still advance the stream -- flushing it
+        // served byte 0 twice. Stale events from the PREVIOUS stream
+        // cannot be pending here: the burst drains the tap FIFO before
+        // exiting, and between streams the driver only writes registers.
         dataport_set_byte(ne2000_dma_current(&s_chip));
         dataport_serve_burst(mdnet_dp_next);
         dataport_set_byte(ne2000_dma_current(&s_chip));

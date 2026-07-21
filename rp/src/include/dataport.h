@@ -50,10 +50,6 @@ uint32_t dataport_readCount(void);
 // outrun the serve (which duplicated bytes -- e.g. the PROM MAC). Runs
 // until command-register activity or ~200 us of bus silence.
 void dataport_serve_burst(uint8_t (*next_byte)(void));
-
-// Discard pending ROM4 tap events (stale reads of the previous stream).
-// Call at a remote-read arm before staging the new stream's first byte.
-void dataport_flush(void);
 // Non-data-port ROM4 read counters (all registers / register 7), so a
 // driver spinning on a register poll is visible on the UART.
 uint32_t dataport_regReadCount(void);
