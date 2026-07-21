@@ -67,7 +67,7 @@ static inline uint8_t ne2000_page(const ne2000_t *chip) {
 
 // One byte at remote-DMA address `addr`. PROM and out-of-range are
 // read-only.
-static uint8_t dma_read_byte(const ne2000_t *chip, uint16_t addr) {
+static uint8_t NE2000_TIME_CRITICAL(dma_read_byte)(const ne2000_t *chip, uint16_t addr) {
   if (addr < NE2000_PROM_SIZE) {
     return chip->prom[addr];
   }
@@ -77,7 +77,7 @@ static uint8_t dma_read_byte(const ne2000_t *chip, uint16_t addr) {
   return 0;
 }
 
-static void dma_write_byte(ne2000_t *chip, uint16_t addr, uint8_t data) {
+static void NE2000_TIME_CRITICAL(dma_write_byte)(ne2000_t *chip, uint16_t addr, uint8_t data) {
   if (addr >= DMA_BUFFER_BASE && addr < DMA_BUFFER_END) {
     chip->mem[addr - DMA_BUFFER_BASE] = data;
   }
@@ -87,7 +87,7 @@ static void dma_write_byte(ne2000_t *chip, uint16_t addr, uint8_t data) {
 // rx ring stop page back to the start page (the chip wraps while reading a
 // received frame that straddles the ring end). PROM/tx-page accesses stay
 // linear -- they never reach pstop.
-static void dma_advance(ne2000_t *chip) {
+static void NE2000_TIME_CRITICAL(dma_advance)(ne2000_t *chip) {
   chip->rsar++;
   if (chip->rcnt > 0) {
     chip->rcnt--;
@@ -105,13 +105,13 @@ static void dma_advance(ne2000_t *chip) {
 
 // Public cursor access for the data-port serve: the byte at the current
 // remote-DMA address, and a step to the next (with ring wrap / RDC).
-uint8_t ne2000_dma_current(const ne2000_t *chip) {
+uint8_t NE2000_TIME_CRITICAL(ne2000_dma_current)(const ne2000_t *chip) {
   return dma_read_byte(chip, chip->rsar);
 }
-void ne2000_dma_advance(ne2000_t *chip) { dma_advance(chip); }
+void NE2000_TIME_CRITICAL(ne2000_dma_advance)(ne2000_t *chip) { dma_advance(chip); }
 
 // Execute a command-register write (side effects: DMA setup, transmit).
-static void ne2000_command(ne2000_t *chip, uint8_t cmd) {
+static void NE2000_TIME_CRITICAL(ne2000_command)(ne2000_t *chip, uint8_t cmd) {
   chip->cr = cmd;
 
   if (cmd & CR_STOP) {
@@ -140,7 +140,7 @@ static void ne2000_command(ne2000_t *chip, uint8_t cmd) {
   }
 }
 
-void ne2000_reg_write(ne2000_t *chip, uint8_t reg, uint8_t data) {
+void NE2000_TIME_CRITICAL(ne2000_reg_write)(ne2000_t *chip, uint8_t reg, uint8_t data) {
   reg &= 0x1Fu;
 
   if (reg == REG_CR) {
@@ -199,7 +199,7 @@ void ne2000_reg_write(ne2000_t *chip, uint8_t reg, uint8_t data) {
   }
 }
 
-uint8_t ne2000_reg_read(ne2000_t *chip, uint8_t reg) {
+uint8_t NE2000_TIME_CRITICAL(ne2000_reg_read)(ne2000_t *chip, uint8_t reg) {
   reg &= 0x1Fu;
 
   if (reg == REG_DATAPORT) {

@@ -61,7 +61,7 @@ static inline void write_slots(uint8_t b) {
   r[DP_SLOT3] = b;
 }
 
-void dataport_set_byte(uint8_t b) { write_slots(b); }
+void __not_in_flash_func(dataport_set_byte)(uint8_t b) { write_slots(b); }
 
 // Tight serve for an armed remote read: poll only the ROM4 tap so each
 // data-port read is re-staged within ~200 ns -- the full Core-1 loop's
@@ -94,7 +94,7 @@ void __not_in_flash_func(dataport_serve_burst)(uint8_t (*next_byte)(void)) {
   }
 }
 
-void dataport_service(uint8_t (*next_byte)(void)) {
+void __not_in_flash_func(dataport_service)(uint8_t (*next_byte)(void)) {
   while (!pio_sm_is_rx_fifo_empty(s_pio, (uint)s_sm)) {
     uint32_t word = pio_sm_get(s_pio, (uint)s_sm);
     uint16_t addr = (uint16_t)(word >> 16);
@@ -141,7 +141,7 @@ void dataport_init(void) {
           s_crSm);
 }
 
-int dataport_crtap_get(uint16_t *addr) {
+int __not_in_flash_func(dataport_crtap_get)(uint16_t *addr) {
   if (s_crSm < 0 || pio_sm_is_rx_fifo_empty(s_pio, (uint)s_crSm)) {
     return 0;
   }

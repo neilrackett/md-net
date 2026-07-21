@@ -167,7 +167,7 @@ static uint8_t reg7_value(void) {
 // by dataport_service after each data-port read) steps to the next byte;
 // the loop also refreshes the served byte each iteration so an RSAR change
 // from the register path is reflected before the ST reads.
-static uint8_t mdnet_dp_next(void) {
+static uint8_t __not_in_flash_func(mdnet_dp_next)(void) {
   ne2000_dma_advance(&s_chip);
   return ne2000_dma_current(&s_chip);
 }
@@ -176,7 +176,9 @@ static uint8_t mdnet_dp_next(void) {
 // the selected page and flip register 7 immediately. This is the fast path
 // that beats the driver's page-select -> CURR-read window (the commemul DMA
 // ring was too slow, leaving register 7 stale).
-static void crtap_service(void) {
+static void on_rom3_sample(uint16_t sample);  // defined below
+
+static void __not_in_flash_func(crtap_service)(void) {
   uint16_t addr;
   while (dataport_crtap_get(&addr)) {
     if (mdnet_sample_reg(addr) == 0x00u) {  // command-register write
@@ -184,6 +186,10 @@ static void crtap_service(void) {
       s_curpage = (uint8_t)((cr >> 6) & 0x03u);
       rom4_bytes()[MDNET_REG_READ_OFFSET(0x07u)] = reg7_value();
       if (cr & CR_RREAD) {  // remote-DMA read armed: serve it NOW
+        // The RSAR/RCNT setup writes travel via commemul, which the
+        // hot/cold loop drains only on cold laps -- drain it here so the
+        // chip's rsar reflects this arm before we stage and serve.
+        commemul_poll(on_rom3_sample);
         s_dbgRsar = s_chip.rsar;
         s_dbgRcnt = s_chip.rcnt;
         s_dbgB[0] = ne2000_dma_current(&s_chip);
@@ -209,7 +215,7 @@ static void crtap_service(void) {
 // Register 7 is served for the tracked page; BNRY/TSR/RSR are page-0
 // registers the driver reads directly. Runs every Core-1 iteration instead
 // of the full 16-register restage so the loop stays short.
-static void stage_hot(void) {
+static void __not_in_flash_func(stage_hot)(void) {
   volatile uint8_t *r = rom4_bytes();
   r[MDNET_REG_READ_OFFSET(0x07u)] = reg7_value();  // ISR (page 0) / CURR (page 1)
   r[MDNET_REG_READ_OFFSET(0x03u)] = s_chip.bnry;   // BNRY
@@ -222,7 +228,7 @@ static void stage_hot(void) {
 // into the ring). The two latency-critical actions -- the register-7 page
 // flip and arming a remote-DMA read -- are handled by the faster CR tap
 // (crtap_service), not here.
-static void on_rom3_sample(uint16_t sample) {
+static void __not_in_flash_func(on_rom3_sample)(uint16_t sample) {
   uint8_t reg = mdnet_sample_reg(sample);
   uint8_t data = mdnet_sample_data(sample);
   // Latch write-path diagnostics BEFORE the model consumes the sample, so
@@ -265,19 +271,29 @@ static volatile uint32_t s_core1Loops = 0;  // heartbeat: Core 1 alive?
 static void __not_in_flash_func(mdnet_core1_loop)(void) {
   static uint8_t txbuf[NE2000_MTU];
   ne2000_set_yield(core1_yield);
+  // Hot/cold split: the taps are polled every lap with nothing else in the
+  // way, so a CR arm or data-port read is picked up within ~100-200 ns --
+  // the driver decides its whole personality (NE2000 vs NE1000 fallback,
+  // and the MAC it installs) from how cleanly the 32 PROM bytes serve, so
+  // the first reads after an arm must never race the servicing. The
+  // slower work (commemul drain, register restage, RX delivery, TX
+  // handoff) runs every 64th lap.
+  uint32_t lap = 0;
   for (;;) {
     s_core1Loops++;
-    // CR tap first, every iteration: flip register 7's page with minimal
-    // latency so it's correct before the driver's next read. Then the full
-    // command-bus drain (chip state), the data-port serve, and the fast
-    // register restage.
-    crtap_service();
-    commemul_poll(on_rom3_sample);         // register + TX-byte writes
+    crtap_service();                       // page flips + read-arm bursts
     dataport_service(mdnet_dp_next);       // advance the served byte per read
+
+    if (++lap < 64u) {
+      continue;
+    }
+    lap = 0;
+
+    commemul_poll(on_rom3_sample);         // register + TX-byte writes
     dataport_set_byte(ne2000_dma_current(&s_chip));  // serve the live byte
     stage_hot();                           // fast restage of the polled registers
 
-    // Deliver at most ONE queued frame per iteration, straight from the
+    // Deliver at most ONE queued frame per cold lap, straight from the
     // queue slot (no staging copy); the yield hook keeps the taps live
     // through the ring copy.
     uint16_t n = 0;
@@ -289,10 +305,6 @@ static void __not_in_flash_func(mdnet_core1_loop)(void) {
         s_rxDropped++;
       }
       rxq_advance();
-      crtap_service();
-      commemul_poll(on_rom3_sample);
-      dataport_service(mdnet_dp_next);
-      dataport_set_byte(ne2000_dma_current(&s_chip));
     }
 
     uint16_t t = ne2000_take_tx(&s_chip, txbuf);  // hand off transmit frames

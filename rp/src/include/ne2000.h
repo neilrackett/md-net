@@ -95,6 +95,17 @@ typedef struct {
 typedef void (*ne2000_yield_fn)(void);
 void ne2000_set_yield(ne2000_yield_fn fn);
 
+// On the RP2040, place the bus-facing hot functions in RAM: XIP flash
+// cache misses add microseconds of jitter, and the data-port serve /
+// register path must respond well inside the m68k's back-to-back bus
+// cycle pace. No-op for the host-side tests.
+#if defined(PICO_RP2040)
+#include "pico/platform.h"
+#define NE2000_TIME_CRITICAL(fn) __not_in_flash_func(fn)
+#else
+#define NE2000_TIME_CRITICAL(fn) fn
+#endif
+
 // Reset the chip to power-on state and load the station MAC (also builds
 // the doubled PROM image). Safe to call repeatedly.
 void ne2000_reset(ne2000_t *chip, const uint8_t mac[6]);
