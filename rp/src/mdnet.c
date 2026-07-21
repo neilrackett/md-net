@@ -97,6 +97,12 @@ static volatile bool s_promReady = false;
 // corruption on header reads (invisible to a memory peek).
 static volatile uint8_t s_srvCap[6];
 static volatile uint8_t s_srvN = 0xFFu;
+// Command-register write trace: every CR value the driver writes, in
+// order. The skip-vs-accept question reduces to whether a header arm
+// (CR=$0A) is followed by a second $0A (rtrvPckt's body arm) -- the
+// dynamic sequence settles what the static disassembly cannot.
+static volatile uint8_t s_crSeq[48];
+static volatile uint8_t s_crN = 0;
 // Hot-lap timing: microseconds for 4096 hot laps, sampled once Core 1 is
 // running. ~1.4M laps/2s has been constant across major loop rewrites --
 // something invisible costs ~300 cycles/lap and must be measured.
@@ -209,6 +215,9 @@ static void __not_in_flash_func(crtap_service)(void) {
   while (dataport_crtap_get(&addr)) {
     if (mdnet_sample_reg(addr) == 0x00u) {  // command-register write
       uint8_t cr = mdnet_sample_data(addr);
+      if (s_crN < sizeof(s_crSeq)) {
+        s_crSeq[s_crN++] = cr;  // CR-sequence trace
+      }
       s_curpage = (uint8_t)((cr >> 6) & 0x03u);
       rom4_bytes()[MDNET_REG_READ_OFFSET(0x07u)] = reg7_value();
       if (cr & CR_RREAD) {  // remote-DMA read armed: serve it NOW
@@ -528,6 +537,20 @@ void mdnet_poll(void) {
             dataport_addrCap(3) & 0x1FFu, dataport_addrCap(4) & 0x1FFu,
             dataport_addrCap(5) & 0x1FFu, dataport_addrCap(6) & 0x1FFu,
             dataport_addrCap(7) & 0x1FFu);
+  }
+
+  // CR-sequence trace: dump and reset when the buffer has content. The
+  // per-packet fingerprint of interest: 62 22 0a 22 (header only, skip)
+  // vs 62 22 0a 22 0a 22 (header + rtrvPckt body arm, accept).
+  if (s_crN >= 12u) {
+    char line[3 * sizeof(s_crSeq) + 1];
+    uint8_t n = s_crN;
+    for (uint8_t i = 0; i < n; i++) {
+      snprintf(&line[3 * i], 4, "%02x ", s_crSeq[i]);
+    }
+    line[3 * n] = '\0';
+    s_crN = 0;
+    DPRINTF("mdnet: CRs %s\n", line);
   }
 
   // Remote-WRITE trace: where the driver armed the write and where its
