@@ -91,6 +91,12 @@ static volatile uint8_t s_dbgWrN = 0xFFu;     // capture cursor (0xFF = idle)
 static volatile uint8_t s_promCap[16];
 static volatile uint8_t s_promIdx = 0xFFu;    // 0xFF = idle; else fill index
 static volatile bool s_promReady = false;
+// Per-arm SERVED-byte capture: the bytes actually handed to the bus for
+// the current remote read (pre-staged byte 0 + the next 5). Compared
+// against the mem[] peek in the RREAD trace, divergence = serve-level
+// corruption on header reads (invisible to a memory peek).
+static volatile uint8_t s_srvCap[6];
+static volatile uint8_t s_srvN = 0xFFu;
 // Hot-lap timing: microseconds for 4096 hot laps, sampled once Core 1 is
 // running. ~1.4M laps/2s has been constant across major loop rewrites --
 // something invisible costs ~300 cycles/lap and must be measured.
@@ -186,6 +192,9 @@ static uint8_t __not_in_flash_func(mdnet_dp_next)(void) {
       s_promReady = true;
     }
   }
+  if (s_srvN < sizeof(s_srvCap)) {  // per-arm served-byte capture
+    s_srvCap[s_srvN++] = b;
+  }
   return b;
 }
 
@@ -226,6 +235,8 @@ static void __not_in_flash_func(crtap_service)(void) {
           s_promCap[0] = s_dbgB[0];  // byte 0 = the pre-staged byte
           s_promIdx = 1;             // subsequent serves append
         }
+        s_srvCap[0] = s_dbgB[0];  // per-arm capture: byte 0 = pre-staged
+        s_srvN = 1;
         // Immediate tight-loop serve: pre-stage the stream's first byte,
         // then stay in the burst until the driver moves on. Do NOT flush
         // pending tap events: a first read that raced the arm detection
@@ -491,9 +502,11 @@ void mdnet_poll(void) {
   static uint32_t lastRread = 0;
   uint32_t rr = s_dbgRreadSeq;
   if (rr != lastRread) {
-    DPRINTF("mdnet: RREAD rsar=%04x rcnt=%u b=%02x %02x %02x %02x\n",
+    DPRINTF("mdnet: RREAD rsar=%04x rcnt=%u b=%02x %02x %02x %02x "
+            "srv=%02x %02x %02x %02x %02x %02x\n",
             (unsigned)s_dbgRsar, (unsigned)s_dbgRcnt, s_dbgB[0], s_dbgB[1],
-            s_dbgB[2], s_dbgB[3]);
+            s_dbgB[2], s_dbgB[3], s_srvCap[0], s_srvCap[1], s_srvCap[2],
+            s_srvCap[3], s_srvCap[4], s_srvCap[5]);
     lastRread = rr;
   }
 
