@@ -353,7 +353,10 @@ static void __not_in_flash_func(on_rom3_sample)(uint16_t sample) {
 static void __not_in_flash_func(core1_yield)(void) {
   crtap_service();
   dataport_service(mdnet_dp_consumed);
-  mdnet_dp_restage();
+  // No restage here: all data-port reads happen inside an armed burst,
+  // where dataport_serve_burst owns the (deferred) restage. Restaging
+  // from the yield could rewrite the window mid-movep while a delivery
+  // overlaps the driver's body read.
 }
 
 static volatile uint32_t s_core1Loops = 0;  // heartbeat: Core 1 alive?
@@ -581,16 +584,32 @@ void mdnet_poll(void) {
   // Unified event-trace dump: Rrr=vv for register reads (value staged at
   // read time), Wrr=dd for writes. The driver's full decision context.
   if (s_evtN >= 20u) {
-    char line[7 * (sizeof(s_evtSeq) / sizeof(s_evtSeq[0])) + 1];
-    uint8_t n = s_evtN;
-    for (uint8_t i = 0; i < n; i++) {
+    // Idle filter: a buffer of nothing but R07=00 polls (the driver's
+    // steady-state ISR poll) is noise -- and at 115200 baud each ~250
+    // char line blocks Core 0 (which owns WiFi) for ~20 ms. Only print
+    // buffers containing a write or a non-zero read.
+    bool interesting = false;
+    for (uint8_t i = 0; i < s_evtN; i++) {
       uint16_t e = s_evtSeq[i];
-      snprintf(&line[7 * i], 8, "%c%02x=%02x ", (e & 0x8000u) ? 'R' : 'W',
-               (unsigned)((e >> 8) & 0x1Fu), (unsigned)(e & 0xFFu));
+      if (!(e & 0x8000u) || (e & 0xFFu) != 0u) {
+        interesting = true;
+        break;
+      }
     }
-    line[7 * n] = '\0';
-    s_evtN = 0;
-    DPRINTF("mdnet: TRC %s\n", line);
+    if (!interesting) {
+      s_evtN = 0;
+    } else {
+      char line[7 * (sizeof(s_evtSeq) / sizeof(s_evtSeq[0])) + 1];
+      uint8_t n = s_evtN;
+      for (uint8_t i = 0; i < n; i++) {
+        uint16_t e = s_evtSeq[i];
+        snprintf(&line[7 * i], 8, "%c%02x=%02x ", (e & 0x8000u) ? 'R' : 'W',
+                 (unsigned)((e >> 8) & 0x1Fu), (unsigned)(e & 0xFFu));
+      }
+      line[7 * n] = '\0';
+      s_evtN = 0;
+      DPRINTF("mdnet: TRC %s\n", line);
+    }
   }
 
   // Remote-WRITE trace: where the driver armed the write and where its

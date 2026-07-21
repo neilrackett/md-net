@@ -143,7 +143,6 @@ void __not_in_flash_func(dataport_serve_burst)(void (*consumed)(uint8_t slot)) {
 }
 
 void __not_in_flash_func(dataport_service)(void (*consumed)(uint8_t slot)) {
-  bool dirty = false;
   while (!pio_sm_is_rx_fifo_empty(s_pio, (uint)s_sm)) {
     uint32_t word = pio_sm_get(s_pio, (uint)s_sm);
     uint16_t addr = (uint16_t)(word >> 16);
@@ -159,11 +158,12 @@ void __not_in_flash_func(dataport_service)(void (*consumed)(uint8_t slot)) {
     s_count++;
     dataport_note_addr(addr);
     consumed((uint8_t)((addr >> 1) & 3u));
-    dirty = true;
   }
-  if (dirty) {
-    mdnet_dp_restage();  // events drained: window current for the next read
-  }
+  // No restage here: tail events drained outside a burst belong to a
+  // read stream the driver has already left (the burst exits on its
+  // CR activity); the next stream is prestaged at its arm, and the cold
+  // lap refreshes the window in between. An immediate restage here could
+  // land mid-movep when this runs from the yield during a delivery.
 }
 
 void dataport_init(void) {
