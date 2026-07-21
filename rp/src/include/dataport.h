@@ -44,6 +44,12 @@ int dataport_crtap_get(uint16_t *addr);
 // Diagnostics: total data-port reads Core 1 has observed since boot (used
 // to confirm the tap is detecting reads on hardware).
 uint32_t dataport_readCount(void);
+
+// Tight-loop serve for an armed remote read: re-stages the next byte
+// within ~200 ns of each data-port read so back-to-back m68k reads can't
+// outrun the serve (which duplicated bytes -- e.g. the PROM MAC). Runs
+// until command-register activity or ~200 us of bus silence.
+void dataport_serve_burst(uint8_t (*next_byte)(void));
 // Non-data-port ROM4 read counters (all registers / register 7), so a
 // driver spinning on a register poll is visible on the UART.
 uint32_t dataport_regReadCount(void);

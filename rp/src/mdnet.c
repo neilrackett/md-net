@@ -43,6 +43,11 @@
 
 static ne2000_t s_chip;
 static volatile bool s_active = false;
+// Set when the CR tap sees a remote-read arm; the Core-1 loop then serves
+// the read in dataport_serve_burst's tight loop (full-loop latency lost
+// against back-to-back m68k reads and duplicated served bytes).
+static volatile bool s_burstPending = false;
+
 // The driver's currently selected register page, tracked low-latency from
 // the ROM3 CR tap so register 7 (ISR in page 0, CURR in page 1) is staged
 // with the right meaning before the driver reads it.
@@ -188,6 +193,7 @@ static void crtap_service(void) {
         s_dbgRcnt = s_chip.rcnt;
         s_dbgB[0] = ne2000_dma_current(&s_chip);
         s_dbgRreadSeq++;
+        s_burstPending = true;  // serve the burst with tight-loop latency
       }
     }
   }
@@ -264,6 +270,14 @@ static void __not_in_flash_func(mdnet_core1_loop)(void) {
     dataport_service(mdnet_dp_next);       // advance the served byte per read
     dataport_set_byte(ne2000_dma_current(&s_chip));  // serve the live byte
     stage_hot();                           // fast restage of the polled registers
+
+    // An armed remote read gets a dedicated tight-loop serve so the
+    // staged byte always beats the m68k's next read.
+    if (s_burstPending) {
+      s_burstPending = false;
+      dataport_serve_burst(mdnet_dp_next);
+      dataport_set_byte(ne2000_dma_current(&s_chip));
+    }
 
     // Deliver at most ONE queued frame per iteration, straight from the
     // queue slot (no staging copy); the yield hook keeps the taps live
@@ -395,13 +409,15 @@ void mdnet_poll(void) {
   if (dp != lastDp || rx != lastRx || tx != lastTx ||
       (uint32_t)(nowUs - lastStatsUs) > 2000000u) {
     DPRINTF("mdnet: dp-reads=%lu rx=%lu(drop %lu) tx=%lu(cmd %lu drop %lu) "
-            "c1=%lu regs=%lu r7=%lu pg=%u v=%02x\n",
+            "c1=%lu regs=%lu r7=%lu pg=%u v=%02x | ps=%02x pe=%02x cu=%02x "
+            "bn=%02x st=%d rcr=%02x\n",
             (unsigned long)dp, (unsigned long)rx, (unsigned long)s_rxDropped,
             (unsigned long)tx, (unsigned long)s_txCmd,
             (unsigned long)s_txDropped, (unsigned long)s_core1Loops,
             (unsigned long)dataport_regReadCount(),
             (unsigned long)dataport_reg7ReadCount(), (unsigned)s_curpage,
-            reg7_value());
+            reg7_value(), s_chip.pstart, s_chip.pstop, s_chip.curr,
+            s_chip.bnry, s_chip.started ? 1 : 0, s_chip.rcr);
     lastDp = dp;
     lastRx = rx;
     lastTx = tx;

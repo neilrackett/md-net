@@ -63,6 +63,37 @@ static inline void write_slots(uint8_t b) {
 
 void dataport_set_byte(uint8_t b) { write_slots(b); }
 
+// Tight serve for an armed remote read: poll only the ROM4 tap so each
+// data-port read is re-staged within ~200 ns -- the full Core-1 loop's
+// ~1.5 us latency loses against the m68k's back-to-back read pace, which
+// duplicated served bytes (observed: the PROM MAC read back as
+// 28:28:28:cd:c1:c1). Exits on command-register activity (the driver
+// moved on) or a sustained quiet period.
+void __not_in_flash_func(dataport_serve_burst)(uint8_t (*next_byte)(void)) {
+  uint32_t quiet = 0;
+  while (quiet < 20000u) {  // ~200 us of bus silence ends the burst
+    if (!pio_sm_is_rx_fifo_empty(s_pio, (uint)s_sm)) {
+      uint32_t word = pio_sm_get(s_pio, (uint)s_sm);
+      uint16_t addr = (uint16_t)(word >> 16);
+      uint8_t reg = (uint8_t)((addr >> 9) & 0x1Fu);
+      if (reg == DP_REG) {
+        s_count++;
+        write_slots(next_byte());
+        quiet = 0;
+        continue;
+      }
+      s_regReads++;
+      if (reg == 0x07u) {
+        s_reg7Reads++;
+      }
+    }
+    if (!pio_sm_is_rx_fifo_empty(s_pio, (uint)s_crSm)) {
+      break;  // command-register activity: return to the full loop
+    }
+    quiet++;
+  }
+}
+
 void dataport_service(uint8_t (*next_byte)(void)) {
   while (!pio_sm_is_rx_fifo_empty(s_pio, (uint)s_sm)) {
     uint32_t word = pio_sm_get(s_pio, (uint)s_sm);
