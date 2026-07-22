@@ -31,6 +31,9 @@ void dataport_init(void);
 // Stage a 4-byte stream window across the four serve slots (see
 // dataport.c). Slot k holds stream byte base+k.
 void dataport_stage4(uint8_t b0, uint8_t b1, uint8_t b2, uint8_t b3);
+// Rewrite only slots 0..k (consumed slots are always safe mid-burst).
+void dataport_stage_upto(uint8_t k, uint8_t b0, uint8_t b1, uint8_t b2,
+                         uint8_t b3);
 
 // Drain the ROM4 tap FIFO; for each data-port read that occurred, call
 // next_byte() and serve its result (so the ST's following read gets the

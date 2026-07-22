@@ -93,6 +93,28 @@ void __not_in_flash_func(dataport_stage4)(uint8_t b0, uint8_t b1, uint8_t b2,
   r[DP_SLOT3] = b3;
 }
 
+// Rewrite only slots 0..k with the next window's first k+1 bytes. A slot
+// that was just consumed is always safe to rewrite immediately -- an
+// in-flight movep burst only reads ASCENDING slots -- so this gives
+// pollers a ~200 ns slot-0 refresh (their reads come ~1 us apart, faster
+// than any deferral) and refreshes the whole window instantly when a
+// movep.l completes (k=3), with zero risk to a burst in progress.
+void __not_in_flash_func(dataport_stage_upto)(uint8_t k, uint8_t b0,
+                                              uint8_t b1, uint8_t b2,
+                                              uint8_t b3) {
+  volatile uint8_t *r = rom4();
+  r[DP_SLOT0] = b0;
+  if (k >= 1u) {
+    r[DP_SLOT1] = b1;
+  }
+  if (k >= 2u) {
+    r[DP_SLOT2] = b2;
+  }
+  if (k >= 3u) {
+    r[DP_SLOT3] = b3;
+  }
+}
+
 // Tight serve for an armed remote read: poll only the ROM4 tap so each
 // data-port read is re-staged within ~200 ns -- the full Core-1 loop's
 // ~1.5 us latency loses against the m68k's back-to-back read pace, which

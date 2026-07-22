@@ -237,10 +237,16 @@ static void __not_in_flash_func(mdnet_dp_consumed)(uint8_t slot) {
     ne2000_dma_advance(&s_chip);
   }
   s_dpPrevSlot = (int8_t)slot;
-  // NO restage here: rewriting the slots mid-movep-burst shifts the
-  // window under the reads that are still consuming it. The caller
-  // restages once the burst has gone quiet (dataport_serve_burst /
-  // dataport_service).
+  // Immediately refill the CONSUMED slots (0..slot) with the next
+  // window's bytes: always safe mid-burst (movep only reads ascending
+  // slots), and fast enough for pollers whose reads come ~1 us apart --
+  // the deferred full restage alone lost that race at header-read pace.
+  // Slots above `slot` stay untouched for any burst in flight; the arm
+  // prestage / deferred restage realign them between streams.
+  dataport_stage_upto(slot, ne2000_dma_peek(&s_chip, 0),
+                      ne2000_dma_peek(&s_chip, 1),
+                      ne2000_dma_peek(&s_chip, 2),
+                      ne2000_dma_peek(&s_chip, 3));
 }
 
 // Drain the low-latency ROM3 CR tap: for each command-register write, track
