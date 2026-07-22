@@ -288,41 +288,35 @@ static void __not_in_flash_func(crtap_service)(void) {
       s_curpage = (uint8_t)((cr >> 6) & 0x03u);
       rom4_bytes()[MDNET_REG_READ_OFFSET(0x07u)] = reg7_value();
       if (cr & CR_RREAD) {  // remote-DMA read armed: serve it NOW
-        // The RSAR/RCNT setup writes travel via commemul, which the
-        // hot/cold loop drains only on cold laps -- drain it here so the
-        // chip's rsar reflects this arm before we stage and serve.
-        commemul_poll(on_rom3_sample);
-        s_dbgRsar = s_chip.rsar;
-        s_dbgRcnt = s_chip.rcnt;
-        s_dbgB[0] = ne2000_dma_current(&s_chip);
-        // Peek the next 3 bytes too (read-only; rsar untouched): for a
-        // body read at offset 16 these are the ethertype + first payload
-        // byte -- identifies WHAT the driver is reading (0806 ARP / 0800
-        // IP) without disturbing the serve.
-        for (uint8_t k = 1; k < 4u; k++) {
-          uint16_t a = (uint16_t)(s_chip.rsar + k);
+        // Enter the burst IMMEDIATELY -- nothing else. The window was
+        // prestaged at the RSARHI write (crtap-owned RSAR/RCNT), so the
+        // only job here is to be serving when read1 arrives ~2.5 us
+        // after the arm. The commemul drain that used to sit here cost
+        // multiple microseconds exactly when the backlog was largest
+        // (the probe, right after the driver's init write burst) and
+        // read1 consumed a stale slot -- the residual PROM dup and the
+        // header next-byte misreads both traced to it.
+        uint16_t armRsar = s_chip.rsar;  // latch before serving advances it
+        uint16_t armRcnt = s_chip.rcnt;
+        if (armRsar == 0u && armRcnt == 32u && !s_promReady) {
+          s_promIdx = 0;  // consumed bytes fill the capture
+        }
+        s_srvN = 0;  // per-arm capture restarts; consumed bytes fill it
+        dataport_serve_burst(mdnet_dp_consumed);
+        mdnet_dp_restage();
+        // Diagnostics AFTER the serve: peek the first 4 bytes of the
+        // armed stream from the latched rsar (0806/0800 at offset 16
+        // identifies ARP/IP bodies).
+        s_dbgRsar = armRsar;
+        s_dbgRcnt = armRcnt;
+        for (uint8_t k = 0; k < 4u; k++) {
+          uint16_t a = (uint16_t)(armRsar + k);
           s_dbgB[k] = (a < 32u) ? s_chip.prom[a]
                                 : ((a >= 0x2000u && a < 0x8000u)
                                        ? s_chip.mem[a - 0x2000u]
                                        : 0u);
         }
         s_dbgRreadSeq++;
-        if (s_chip.rsar == 0u && s_chip.rcnt == 32u && !s_promReady) {
-          s_promIdx = 0;  // consumed bytes fill the capture
-        }
-        s_srvN = 0;  // per-arm capture restarts; consumed bytes fill it
-        // Immediate tight-loop serve: pre-stage the stream's first byte,
-        // then stay in the burst until the driver moves on. Do NOT flush
-        // pending tap events: a first read that raced the arm detection
-        // already consumed the correct byte 0 (the main loop stages from
-        // RSAR as soon as it's written, before the CR arm), and its
-        // queued event must still advance the stream -- flushing it
-        // served byte 0 twice. Stale events from the PREVIOUS stream
-        // cannot be pending here: the burst drains the tap FIFO before
-        // exiting, and between streams the driver only writes registers.
-        mdnet_dp_restage();
-        dataport_serve_burst(mdnet_dp_consumed);
-        mdnet_dp_restage();
       }
     }
   }
