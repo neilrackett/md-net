@@ -117,6 +117,17 @@ void __not_in_flash_func(mdnet_trace_evt)(uint16_t evt) {
 // something invisible costs ~300 cycles/lap and must be measured.
 static volatile uint32_t s_lapUs = 0;
 
+// ARP-fixup stop-gap (see process_arp in the STinG driver, ENESTNG.C):
+// STinG only resolves an ARP reply whose target IP equals its own IP.
+// Because STinG shares the Pico's MAC, replies arriving at that MAC may
+// be targeted at the Pico's own lwIP IP, not STinG's, so STinG ignores
+// them. We snoop STinG's IP from its outbound ARP requests (sender-IP
+// field) and rewrite inbound ARP replies' target IP/MAC to match before
+// queueing -- STinG then accepts the (correct) sender->MAC mapping.
+static volatile uint32_t s_stingIp = 0;         // net-order, from ST's ARP
+static volatile uint8_t s_ourMac[6];            // shared STA MAC
+static volatile bool s_ourMacValid = false;
+
 static bool rxq_push(const uint8_t *f, uint16_t len) {
   uint16_t h = s_rxq.head;
   uint16_t nh = (uint16_t)((h + 1u) % RXQ_SLOTS);
@@ -484,12 +495,20 @@ static err_t mdnet_netif_input(struct pbuf *p, struct netif *inp) {
     // is chatty) would stall frame intake.
     if (len >= 42u && rxbuf[12] == 0x08u && rxbuf[13] == 0x06u) {
       if (rxbuf[21] == 0x02u) {
-        // ARP reply -- the packet STinG must receive to resolve a peer.
-        // Never rate-limited: replies are rare and each one matters.
-        DPRINTF("mdnet: ARP reply %u.%u.%u.%u is-at "
-                "%02x:%02x:%02x:%02x:%02x:%02x\n",
+        // ARP reply. Log sender + original target, then apply the fixup:
+        // rewrite the target IP/MAC to STinG's so process_arp accepts it
+        // (its ARP payload target-IP is at frame bytes 38..41, target-MAC
+        // at 32..37). We do NOT touch the sender fields, so the mapping
+        // STinG enters (src_ip -> src_ether) stays truthful.
+        DPRINTF("mdnet: ARP reply %u.%u.%u.%u is-at %02x:%02x:%02x:%02x:"
+                "%02x:%02x (was for %u.%u.%u.%u)\n",
                 rxbuf[28], rxbuf[29], rxbuf[30], rxbuf[31], rxbuf[22],
-                rxbuf[23], rxbuf[24], rxbuf[25], rxbuf[26], rxbuf[27]);
+                rxbuf[23], rxbuf[24], rxbuf[25], rxbuf[26], rxbuf[27],
+                rxbuf[38], rxbuf[39], rxbuf[40], rxbuf[41]);
+        if (s_stingIp != 0u && s_ourMacValid && len >= 42u) {
+          memcpy(&rxbuf[38], (const void *)&s_stingIp, 4);  // target IP
+          memcpy(&rxbuf[32], (const uint8_t *)s_ourMac, 6); // target MAC
+        }
       } else if (rxbuf[21] == 0x01u) {
         static uint32_t s_lastArpLog;
         uint32_t now = time_us_32();
@@ -526,6 +545,8 @@ void mdnet_init(void) {
     DPRINTF("mdnet: cyw43 MAC unavailable, using fallback\n");
   }
   ne2000_reset(&s_chip, mac);
+  memcpy((uint8_t *)s_ourMac, mac, 6);  // for the ARP fixup
+  s_ourMacValid = true;
   dataport_init();   // ROM4 tap (PIO only; serviced from Core 1 below)
   install_rx_tap();  // intercept WiFi RX frames into the rx queue
   DPRINTF("mdnet: NE2000 model ready, MAC %02x:%02x:%02x:%02x:%02x:%02x\n",
@@ -560,6 +581,18 @@ void mdnet_poll(void) {
             txbuf[5], txbuf[6], txbuf[7], txbuf[8], txbuf[9], txbuf[10],
             txbuf[11], txbuf[12], txbuf[13], txbuf[14], txbuf[15], txbuf[16],
             txbuf[17], txbuf[18], txbuf[19]);
+    // ARP-fixup: learn STinG's own IP from its outbound ARP requests
+    // (op 1). Sender-IP is at frame bytes 28..31.
+    if (t >= 42u && txbuf[12] == 0x08u && txbuf[13] == 0x06u &&
+        txbuf[21] == 0x01u) {
+      uint32_t ip;
+      memcpy(&ip, &txbuf[28], 4);
+      if (ip != 0u && ip != s_stingIp) {
+        s_stingIp = ip;
+        DPRINTF("mdnet: learned STinG IP %u.%u.%u.%u\n", txbuf[28], txbuf[29],
+                txbuf[30], txbuf[31]);
+      }
+    }
     int err = cyw43_send_ethernet(&cyw43_state, CYW43_ITF_STA, t, txbuf, false);
     if (err != 0) {
       DPRINTF("mdnet TX %u bytes failed: %d\n", (unsigned)t, err);
