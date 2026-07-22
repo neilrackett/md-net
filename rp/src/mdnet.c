@@ -349,9 +349,13 @@ static void __not_in_flash_func(stage_hot)(void) {
 static void __not_in_flash_func(on_rom3_sample)(uint16_t sample) {
   uint8_t reg = mdnet_sample_reg(sample);
   uint8_t data = mdnet_sample_data(sample);
-  if (s_curpage == 0u && reg >= 0x08u && reg <= 0x0Bu) {
-    return;  // RSAR/RCNT are crtap-owned (see crtap_service): re-applying
-             // them here would rewind a stream that has since advanced
+  // Page gate must use the IN-STREAM page (the chip's CR, which this
+  // stream updates in order) -- NOT s_curpage, which tracks the crtap
+  // stream and can have moved on by the time commemul replays a sample.
+  // With the wrong gate, a late replay of RSARLO/RSARHI rewound the
+  // remote-DMA stream mid-serve (seen as srv!=b on ARP body byte 3).
+  if (((s_chip.cr >> 6) & 3u) == 0u && reg >= 0x08u && reg <= 0x0Bu) {
+    return;  // RSAR/RCNT are crtap-owned (see crtap_service)
   }
   if (reg != 0x00u && reg != 0x10u) {  // CR traced at crtap; data port too chatty
     mdnet_trace_evt((uint16_t)(((uint16_t)reg << 8) | data));
