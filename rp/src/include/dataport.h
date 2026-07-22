@@ -64,4 +64,8 @@ uint32_t dataport_reg7ReadCount(void);
 uint8_t dataport_addrCapCount(void);
 uint16_t dataport_addrCap(uint8_t i);
 
+// Ground-truth capture of bytes actually delivered on the bus.
+void dataport_got_reset(void);
+uint8_t dataport_got(uint8_t i);
+
 #endif  // DATAPORT_H

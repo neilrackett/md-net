@@ -308,6 +308,7 @@ static void __not_in_flash_func(crtap_service)(void) {
           s_promIdx = 0;  // consumed bytes fill the capture
         }
         s_srvN = 0;  // per-arm capture restarts; consumed bytes fill it
+        dataport_got_reset();  // ground-truth capture restarts
         dataport_serve_burst(mdnet_dp_consumed);
         mdnet_dp_restage();
         // Diagnostics AFTER the serve: peek the first 4 bytes of the
@@ -587,11 +588,12 @@ void mdnet_poll(void) {
   uint32_t rr = s_dbgRreadSeq;
   if (rr != lastRread) {
     DPRINTF("mdnet: RREAD rsar=%04x rcnt=%u b=%02x %02x %02x %02x "
-            "srv=%02x %02x %02x %02x %02x %02x k=%u%u%u%u%u%u\n",
+            "srv=%02x %02x %02x %02x got=%02x %02x %02x %02x k=%u%u%u%u\n",
             (unsigned)s_dbgRsar, (unsigned)s_dbgRcnt, s_dbgB[0], s_dbgB[1],
             s_dbgB[2], s_dbgB[3], s_srvCap[0], s_srvCap[1], s_srvCap[2],
-            s_srvCap[3], s_srvCap[4], s_srvCap[5], s_srvSlot[0], s_srvSlot[1],
-            s_srvSlot[2], s_srvSlot[3], s_srvSlot[4], s_srvSlot[5]);
+            s_srvCap[3], dataport_got(0), dataport_got(1), dataport_got(2),
+            dataport_got(3), s_srvSlot[0], s_srvSlot[1], s_srvSlot[2],
+            s_srvSlot[3]);
     lastRread = rr;
   }
 

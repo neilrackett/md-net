@@ -79,6 +79,16 @@ static inline void dataport_note_addr(uint16_t addr) {
 uint8_t dataport_addrCapCount(void) { return s_addrN; }
 uint16_t dataport_addrCap(uint8_t i) { return s_addrCap[i & 7u]; }
 
+// GROUND TRUTH capture: the slot content AT EVENT TIME (the cycle has
+// just ended, nothing has been restaged) is the byte the m68k actually
+// latched. Every prior serve diagnostic recorded what we intended to
+// serve; this records what the bus delivered.
+static volatile uint8_t s_gotCap[6];
+static volatile uint8_t s_gotN = 0xFFu;
+
+void dataport_got_reset(void) { s_gotN = 0; }
+uint8_t dataport_got(uint8_t i) { return s_gotCap[i > 5u ? 5u : i]; }
+
 // Stage a 4-byte WINDOW of the stream across the four slots: byte base+k
 // at slot k. A MOVEP.L body copy reads the four ascending addresses in
 // back-to-back ~250 ns bus cycles -- no per-event restage can feed those,
@@ -143,7 +153,11 @@ void __not_in_flash_func(dataport_serve_burst)(void (*consumed)(uint8_t slot)) {
       if (reg == DP_REG) {
         s_count++;
         dataport_note_addr(addr);
-        consumed((uint8_t)((addr >> 1) & 3u));  // slot = which window byte
+        uint8_t k = (uint8_t)((addr >> 1) & 3u);
+        if (s_gotN < 6u) {  // ground truth: what this cycle delivered
+          s_gotCap[s_gotN++] = rom4()[DP_SLOT0 + 2u * k];
+        }
+        consumed(k);  // slot = which window byte
         dirty = true;
         quiet = 0;
         continue;
@@ -179,7 +193,11 @@ void __not_in_flash_func(dataport_service)(void (*consumed)(uint8_t slot)) {
     }
     s_count++;
     dataport_note_addr(addr);
-    consumed((uint8_t)((addr >> 1) & 3u));
+    uint8_t k = (uint8_t)((addr >> 1) & 3u);
+    if (s_gotN < 6u) {  // ground truth: what this cycle delivered
+      s_gotCap[s_gotN++] = rom4()[DP_SLOT0 + 2u * k];
+    }
+    consumed(k);
   }
   // No restage here: tail events drained outside a burst belong to a
   // read stream the driver has already left (the burst exits on its
