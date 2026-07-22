@@ -373,18 +373,17 @@ bool ne2000_deliver_rx(ne2000_t *chip, const uint8_t *frame, uint16_t len) {
   // mem[(P - $40) * 256].
   uint16_t off =
       (uint16_t)((start_page - NE2000_RING_FIRST_PAGE) * NE2000_PAGE_SIZE);
-  // Count byte order: HIGH byte first. The 8390 datasheet says low/high,
-  // and the driver disassembly appears to read it that way -- but the
-  // padding experiment settled it empirically: headers written low/high
-  // made the driver compute count=(byte2<<8)|byte3 (256 -> 1, big frames
-  // -> junk) and fall into its shifted-header recovery, while its
-  // recovered counts and body arms all fit the high-first layout. The
-  // machine outvotes the disassembly.
+  // Count byte order: LOW byte first, per the 8390 datasheet and the
+  // driver disassembly. (A temporary high-first swap once appeared to
+  // work: the serve was delivering header bytes 2/3 out of order during
+  // chained arms -- a bus-ordering bug since fixed at the tap layer --
+  // and the swap was compensating for it. With delivery order enforced,
+  // the datasheet order is correct.)
   uint8_t header[4] = {
       0x01u,                            // RSR: ENRSR_RXOK
       next_page,                        // next packet page
-      (uint8_t)((count >> 8) & 0xFFu),  // count HIGH first (see above)
       (uint8_t)(count & 0xFFu),         // count low
+      (uint8_t)((count >> 8) & 0xFFu),  // count high
   };
   ring_write(chip, &off, header, 4u);
   ring_write(chip, &off, frame, len);   // real received bytes

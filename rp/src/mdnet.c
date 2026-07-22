@@ -258,6 +258,13 @@ static void on_rom3_sample(uint16_t sample);  // defined below
 static void __not_in_flash_func(crtap_service)(void) {
   uint16_t addr;
   while (dataport_crtap_get(&addr)) {
+    // WRITE BARRIER (true bus order): every read that preceded this
+    // write on the bus was pushed to the read FIFO before this write's
+    // cycle ended, so it is queued NOW. Serve them all under the
+    // CURRENT stream cursor before applying the write -- otherwise an
+    // RSAR rebase mid-drain hands old-stream reads new-stream bytes and
+    // vice versa (the cross-stream corruption seen on chained arms).
+    dataport_service(mdnet_dp_consumed);
     uint8_t reg = mdnet_sample_reg(addr);
     // RSAR/RCNT are tracked HERE, in true bus order, not via commemul:
     // the driver writes them only a few bus cycles before the read arm,

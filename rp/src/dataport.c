@@ -138,10 +138,20 @@ void __not_in_flash_func(dataport_serve_burst)(void (*consumed)(uint8_t slot)) {
   uint32_t quiet = 0;
   bool dirty = false;
   while (quiet < 20000u) {  // ~200 us of bus silence ends the burst
+    // TRUE BUS ORDER: a pending ROM3 write PREEMPTS read serving. The
+    // bus serializes everything; a write sitting in the crtap FIFO
+    // precedes any read event that arrives after it, and applying reads
+    // past it serves the wrong stream when the driver chains arms
+    // back-to-back (the wrong-stream headers seen while ring-walking).
+    // Exit so crtap_service applies the write -- which first drains the
+    // reads that preceded it (see the barrier there).
+    if (!pio_sm_is_rx_fifo_empty(s_pio, (uint)s_crSm)) {
+      break;
+    }
     // Deferred restage: only rewrite the window once the read burst has
-    // paused (~30 idle spins ~ 700 ns) -- a movep.l burst consumes the
-    // pre-staged window untouched; pollers read >= 1.5 us apart so the
-    // deferral is invisible to them.
+    // paused -- a movep.l burst consumes the pre-staged window
+    // untouched; pollers read >= 1.5 us apart so the deferral is
+    // invisible to them.
     if (dirty && quiet > 16u) {
       mdnet_dp_restage();
       dirty = false;
@@ -167,9 +177,6 @@ void __not_in_flash_func(dataport_serve_burst)(void (*consumed)(uint8_t slot)) {
         s_reg7Reads++;
       }
       dataport_note_reg_read(reg);
-    }
-    if (!pio_sm_is_rx_fifo_empty(s_pio, (uint)s_crSm)) {
-      break;  // command-register activity: return to the full loop
     }
     quiet++;
   }

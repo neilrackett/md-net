@@ -1,200 +1,235 @@
-# AGENTS.md — md-framebuffer-template
+# AGENTS.md — MD/Net
 
 This file is the playbook for coding agents working in this repository. It is
 the single source of truth; `CLAUDE.md` is a one-line `@AGENTS.md` import, so
 Claude Code loads this file too. Edit this file, not `CLAUDE.md`.
 
-See also: `README.md` (high-level region/userfw overview), `CHANGELOG.md` (release history), `programming.md` (the **upstream** `md-microfirmware-template` reference — useful for background, but its shared-region table describes the upstream layout, *not* this template's: the table below and `cart_shared.h` are authoritative here), and the private `docs/epics/` folder (internal planning notes — one Markdown file per epic, each split into stories — **not committed to the repo**; never link or cite its content, see the rule below).
+See also: `README.md` (user-facing overview), `docs/ne2000-emulation.md`
+(emulation design notes), and the private `docs/epics/` folder (internal
+planning notes — **not committed to the repo**; never link or cite its
+content, see the rule below).
 
 ## ⛔ Never reference the epic docs in shipped material
 
 The epic planning docs live in the private `docs/epics/` folder —
-**internal planning notes that are not committed to the repo** (one
-Markdown file per epic, each split into stories). Do NOT reference them —
-no links to `docs/epics/*.md`, and no "Epic N" / "Story X.Y" citations —
-anywhere, including **this file** and **anything that ships or is
-user-facing**: `README.md`, `SKILL.md` / any skill, the `examples/` apps,
-the public docs, and code/header comments. Describe the behaviour or the
-code directly instead (e.g. "the dual-core split in `fb_core1_dispatch`",
-not "the dual-core split from Story N.M"). When you touch a comment that
-cites an epic/story, rephrase it. Cross-references *between* the epic docs
-themselves are fine — they're not committed. This is a hard rule.
+**internal planning notes that are not committed to the repo**. Do NOT
+reference them — no links to `docs/epics/*.md`, and no "Epic N" /
+"Story X.Y" citations — anywhere, including **this file** and **anything
+that ships or is user-facing**: `README.md`, any skill, the public docs,
+and code/header comments. Describe the behaviour or the code directly
+instead. When you touch a comment that cites an epic/story, rephrase it.
+This is a hard rule.
 
 ## What this repo is
 
-A template for building **sub-20-millisecond audiovisual Sidecartridge Multi-device microfirmware apps** for the Atari ST / STE / MegaST(E) — games, demos, and console/computer emulations where the speed of putting a colourful 320×200 screen up matters. Each "app" is a UF2 image that runs on a Raspberry Pi Pico (RP2040) plugged into the Multi-device cartridge slot, emulating a ROM cartridge for the Atari, while also handling SD card I/O and per-app config. You draw into a **320×200, 16-colour framebuffer** in the Pico's RAM and the firmware blits it to the ST screen every VBL (50 Hz) for you; keyboard input and YM audio come for free. The primary extension point is "draw into the framebuffer, the m68k blits it for you". Public build/usage docs are at <https://docs.sidecartridge.com/sidecartridge-multidevice/programming/>.
+**MD/Net** turns a SidecarTridge Multi-device (Raspberry Pi Pico W /
+RP2040 in the Atari ST cartridge slot) into a **wireless NetUSBee**: it
+emulates the NetUSBee's NE2000 (RTL8019AS) Ethernet controller on the
+cartridge bus and bridges its traffic to the LAN over the Pico W's WiFi,
+so the stock STinG EtherNEC driver (`ENEC.STX`) — and eventually
+MiNTNet — drive it unmodified. Forked from `md-framebuffer-template`;
+the entire A/V stack (framebuffer, audio, IKBD, demos) was stripped and
+the WiFi stack (`network.c`, lwIP) restored from
+`md-microfirmware-template` upstream.
 
-**You develop 100% on the RP2040 side — the framework does the heavy lifting:**
-- **Dual (page-flipped) framebuffer on the Atari ST side** — tear-free display, fully managed for you.
-- **Real 50 Hz**, locked to the ST's vertical blank.
-- **~19 ms of compute every VBL** for your app to draw its frame.
-- **Chunked drawing on the RP2040** — you write one byte per pixel; the framework does the chunked → Atari ST planar conversion for you.
-- **~1 ms per VBL** for that chunky→planar conversion (split across both cores).
-- **~6 kHz, 6-bit sampled sound** out the YM2149.
-- **Atari ST keyboard handled on the RP2040** — decoded scancodes delivered straight to your app.
-
-Network plumbing (WiFi / lwIP / mbedTLS / httpc) was deliberately stripped — apps that need it bring it back from `md-microfirmware-template` upstream.
+Milestones: **v0.1.0** — WiFi bootstrap, `Cconws` boot banner
+("MD/Net connected: <IP>"), return to GEM (done, hardware-validated).
+**v0.2.0** — full NE2000 emulation + packet bridge (in progress; tag
+only when ping/FTP work on hardware). The minor version bumps per
+milestone; **every `make debug` auto-bumps the patch** so each flashed
+image is identifiable.
 
 ## Build
 
-Top-level build is driven by `build.sh` in the repo root:
-
 ```bash
-# <board_type> = pico | pico_w | sidecartos_16mb
-# <build_type> = debug | release   (note: always compiled as MinSizeRel — see below)
-# <app_uuid_key> = UUID4 identifying this app, must match desc/app.json
-./build.sh pico_w release 123e4567-e89b-12d3-a456-426614174000
+make debug    # debug build, UART logging on, bumps patch version
+make build    # production build, UART off, SKIP_VERSION_BUMP=1
 ```
 
-Required host environment:
-- ARM GNU Toolchain 14.2 — export `PICO_TOOLCHAIN_PATH` to its `arm-none-eabi/bin` dir.
-- `atarist-toolkit-docker` (`stcmd`) — needed for the m68k target. `stcmd` requires a PTY (`pty=true`).
-- SDK paths (auto-set from the repo if unset): `PICO_SDK_PATH`, `PICO_EXTRAS_PATH`, `FATFS_SDK_PATH`.
-- Git + GNU Make. VS Code users: the C/C++ Extension Pack, CMake Tools and Cortex-Debug.
+Requirements: ARM GNU toolchain (`PICO_TOOLCHAIN_PATH`),
+`atarist-toolkit-docker` (`stcmd`) for the m68k cartridge stub — **Docker
+must be running** — and the pinned submodules (pico-sdk 2.2.0 etc.,
+re-pinned by the build).
 
-For on-hardware debugging:
-- A Raspberry Pi Debug Probe / Picoprobe wired to the Multi-device header — TX, RX **and both GND pins** must be connected.
-- Optional helpers: `ARM_GDB_PATH` (the `arm-none-eabi/bin` dir) and `PICO_OPENOCD_PATH` (OpenOCD's `tcl` dir).
+### ⚠️ Build-system lessons (learned the hard way)
 
-Build flow (orchestrated by `build.sh`):
-1. Runs `tools/bump_version.sh`, which increments the patch in `version.txt` and syncs it to `rp/version.txt` and `target/version.txt`. Set `SKIP_VERSION_BUMP=1` to release `version.txt` as-is (this is what `make build` does).
-2. Builds the Atari ST target (`target/atarist/build.sh`) via `stcmd make`. `target/atarist/src/fbdrv.s` (the MOVEM-loop cart→ST screen copy) is hand-written and version-controlled — previously generated by `gen_fbdrv.py`, dropped because the routine is small enough that the generator added more complexity than it saved. Enforces a **16 KB hard limit** on `BOOT.BIN` (the cartridge code budget — `CART_CARTRIDGE_CODE_SIZE` in `rp/src/include/cart_shared.h`, mirrored as `CARTRIDGE_CODE_SIZE` in `target/atarist/src/main.s`); a build that exceeds it aborts with `ERROR: cartridge code is N bytes; limit is 16384`. A separate copy (`FIRMWARE.IMG`) is then padded to 64 KB to fill the entire shared region, and `firmware.py` converts it into `rp/src/include/target_firmware.h` (a C byte array embedded in the RP firmware).
-3. Builds the RP firmware (`rp/build.sh`): pins submodule versions (pico-sdk 2.2.0, pico-extras sdk-2.2.0, fatfs-sdk at a specific commit), runs CMake, produces `rp/dist/rp-<board>.uf2`. The FatFs configuration lives at `rp/src/ff/ffconf.h` and shadows the submodule's default via `target_include_directories(... BEFORE PRIVATE)` in `rp/src/CMakeLists.txt`, so the `fatfs-sdk` submodule stays pristine.
-4. Computes MD5, renames to `dist/<APP_UUID>-<VERSION>.uf2`, and substitutes UUID/MD5/version into `dist/<APP_UUID>.json` from the `desc/app.json` template.
-
-### Build gotchas
-- **CMake always builds with `-DCMAKE_BUILD_TYPE=MinSizeRel`** regardless of the `<build_type>` argument. A full `Release` previously caused breakage (memory/over-optimization). The legacy line is left commented in `rp/build.sh`. `<build_type>` only controls the `DEBUG_MODE` macro and the dist filename.
-- Harmless VASM warnings during the m68k build (`target data type overflow`, `trailing garbage after option -D`) can be ignored.
-- VASM/`stcmd` errors like `the input device is not a TTY` mean `stcmd` was invoked without a PTY. `target/atarist/build.sh` already exports `STCMD_NO_TTY=1` for every `stcmd` call it makes; you only need to export it yourself if invoking `stcmd` directly from a non-TTY context (CI, sub-shells, build wrappers). Without it the m68k build can fail silently and the previous `BOOT.BIN` survives — leading to a working RP firmware that displays garbage on the ST because `target_firmware.h` is stale.
-
-### Troubleshooting
-
-| Symptom | Fix |
-| --- | --- |
-| `the input device is not a TTY` when using `stcmd` | `target/atarist/build.sh` already sets `STCMD_NO_TTY=1` for every stcmd call. If you invoke `stcmd` directly from a non-TTY context, export `STCMD_NO_TTY=1` first. |
-| `arm-none-eabi-gcc not found` | Ensure `PICO_TOOLCHAIN_PATH` points to the Arm GNU toolchain bin dir. |
-| `ERROR: cartridge code is N bytes; limit is 16384` | The m68k cartridge grew past 16 KB. Trim `target/atarist/src/` (`main.s` / `userfw.s` and their includes), or move data into `APP_FREE` / `SHARED_VARIABLES` rather than embedding it in the cartridge image. |
-| Final steps fail copying the UF2 | An upstream compile failed — scroll back for the first error before the copy step. |
-| The Atari ST display shows garbage | Almost always a stale `target_firmware.h`. Confirm `target/atarist/dist/BOOT.BIN` was regenerated by the current build (compare its timestamp to the rest of `dist/`); if `stcmd make` failed silently the previous `BOOT.BIN` survives and the m68k boots with the wrong shared-region addresses. |
-
-### CI / release
-- `.github/workflows/build.yml` builds `pico_w` Release on PR.
-- `.github/workflows/release.yml` triggers on `v*` tags: builds, attaches UF2 + JSON to the GitHub Release, uploads to `s3://atarist.sidecartridge.com/`.
-- `make tag` tags HEAD with the contents of `version.txt` and pushes the tag (which triggers release).
-- `upload_s3.sh <file>` is a manual one-off uploader; needs `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`.
-
-### Tests
-There is no test suite. "Verification" is: build succeeds, UF2 boots on hardware, manual interaction over the serial debug console.
+- **`build.sh` has `set -e` — keep it.** It once didn't: a compile error
+  in the RP step was silently survived, the script copied the previous
+  (stale) UF2 from `rp/dist/` into `dist/` under the new version name and
+  printed "Build completed successfully". Five "different" builds shipped
+  identical stale firmware and days of hardware tests were invalidated.
+- **Verify every build by decoding the UF2 payload**, not by trusting the
+  filename: parse the UF2 blocks, byte-swap 16-bit words, and check the
+  embedded banner string reads the expected `MD/Net vX.Y.Z`. The banner
+  shown on the ST at boot is the same string — ask for it on every
+  hardware test.
+- If the m68k step fails (Docker down), the previous `BOOT.BIN` /
+  `target_firmware.h` silently survives; the banner version is the tell.
+- `dist/` is wiped (`rm -rf`) at the start of every build — only the
+  newest UF2 exists.
+- Never grep build logs through filters that exclude `pico-sdk` paths
+  when hunting errors — compile errors triggered *inside* SDK headers
+  carry SDK paths and vanish from the filtered view.
+- Host-side model tests: `cc -Irp/src/include -o /tmp/t
+  tools/ne2000_test.c rp/src/ne2000.c && /tmp/t` — run them after any
+  `ne2000.c` change; they encode driver-observed behaviours.
 
 ## Architecture
 
-The firmware is a **two-target build**: m68k assembly that runs on the Atari ST is compiled into a ROM image, embedded as a C array inside the RP2040 firmware, and served back to the Atari over the cartridge bus that the RP2040 emulates via PIO + DMA.
+### Two-target split
+- `target/atarist/src/main.s` — tiny m68k cartridge stub: prints the
+  versioned banner (from generated `version.inc`), polls
+  `MDNET_STATUS` (`$FA4010`), prints `MDNET_MSG` (`$FA4100`), returns to
+  GEM. No resident code. Built via `stcmd`, embedded into the RP firmware
+  as `target_firmware.h` (16-bit words, cart byte order).
+- `rp/src/` — everything else. `emul.c` boots WiFi and enters the Core-0
+  loop; `mdnet.c` + `ne2000.c` + `dataport.c/.pio` implement the NE2000.
 
-### Framebuffer pipeline (the headline feature)
+### Cartridge-bus interface (EtherNEC conventions)
+- The ST **reads** NE2000 registers from ROM4: `$FA0000 + reg<<9`;
+  register values are staged in the ROM4 RAM mirror at `(reg<<9)^1`
+  (the cart bus swaps bytes within each 16-bit word).
+- The ST **writes** registers by "dummy reads" in ROM3:
+  `$FB0000 + reg<<9 + data<<1` (reg in A9–A13, data in A1–A8). Decode:
+  `reg=(sample>>9)&0x1F`, `data=(sample>>1)&0xFF`.
+- Capture paths: `commemul.c` (32 KB DMA ring, all ROM3 samples, ~1 µs+
+  latency, lossless) and two `dataport.pio` taps on pio1 — the ROM4 tap
+  (data-port + register reads) and the ROM3 "crtap" (low-latency
+  register-write visibility). Tap events **push at bus-cycle END**
+  (sample mid-cycle, explicit blocking `push`) — cycle-start delivery
+  let re-staging race the same cycle's romemul fetch, and `push noblock`
+  dropped events on a full FIFO (blocking = delayed, never lost).
 
-End-to-end, every visible pixel on the ST goes through this path each VBL:
+### ⚠️ THE cardinal rule: true bus order
 
-1. **RP draws into a chunked off-screen buffer** at RP `0x20000000+` (`fb_chunked_buffer`, 320×200 bytes = 64 KB, one byte per pixel, palette index in low nibble). `fb_font.c` writes text; `fb_blit.c` writes rectangles / bitmaps / sprites with color-key.
-2. **RP publishes via chunky-to-planar conversion**. The chunked buffer is bit-transposed to ST planar 4 bpp by a hand-written Thumb assembly worker (`fb_chunked_asm.S` — `fb_c2p_half`). For each 4-pixel uint32 group, plane K's 4-bit nibble = `((q >> K) & 0x01010101) * 0x80402010 >> 28`. Work is split between **Core 0 (top 100 rows) and Core 1 (bottom 100 rows)**, synced via the inter-core FIFO. Both cores write into a 32 KB RP-RAM scratch (`fb_planar_scratch`) in natural row-major order; `fb_chunky_to_planar` then publishes the result into the cart FB at `$FA8300` (RP `0x20030000 + 0x8300`) with the 48-byte m68k MOVEM chunks **pre-reversed** (so the m68k's predec store in step 3 lands each chunk at its natural image position — see "Framebuffer chunk layout for the m68k MOVEM blit" in `cart_shared.h`). Total conversion time: ~1 ms c2p + ~60-120 µs chunk-reversed memcpy.
-3. **m68k blits cart FB → ST screen page** inside `userfw.s`'s VBL loop via the `FBDRV_INLINE` macro — a fully unrolled `movem.l (a6)+, d0-d7/a1-a4` load + `movem.l d0-d7/a1-a4, -(a5)` predec store (**12 longwords / 48 bytes per iter, 666 iterations** for the full 200-line low-res FB, plus a `d16(a5)` MOVEM tail copying the last 32 bytes). A0 and A7 are intentionally omitted from the MOVEM list: A0 is the dedicated Timer-B audio cursor (kept stable across the macro so the audio IRQ handler doesn't have to save/restore it), and A7 keeps the supervisor SP valid so IRQs can fire safely during the macro. Predec mode is 4 cyc/iter faster than `d16(a5)` (8+8n vs 12+8n on 68000), at the cost of writing each chunk in reverse memory order — which is exactly what the RP-side chunk-reversed cart FB layout from step 2 compensates for. A5 is initialised to `UFW_SCREEN_PAGE + 31968` (page end of chunked region) and decrements back to page start over the 666 iters. Pure 68000 CPU, no STE blitter, no `_MCH` cookie dispatch — same code runs on plain ST / STE / MegaSTE / TT / Falcon.
-4. **m68k flips video base** to the page it just wrote. `userfw.s` toggles between `$70000` and `$78000` every frame (`UFW_SCREEN_PAGE` XOR `UFW_SCREEN_XOR`), so the display always reads from a stable page while the next blit fills the other.
-5. **PALETTE_IDX0 (`$FFFF8240`) doubles as a timing tape-measure** — `userfw.s` writes it at three points (post-vsync, blit-start, blit-end) so the ST border shows the blit cost as colored bands. White band = `FBDRV_INLINE` in flight (~17 ms at FB_COPY_LINES=200). Green band = slack until next vsync.
+The bus is one serialized stream; our capture is two FIFOs (reads vs
+writes) with no cross-FIFO ordering. **Events must be applied in bus
+order**, enforced by two invariants (in `dataport_serve_burst` and
+`crtap_service`):
+1. **A pending write preempts read serving** — the burst exits when the
+   crtap FIFO is non-empty, before popping more read events.
+2. **Every write is a read barrier** — before a ROM3 write is applied,
+   all queued read events are served under the *current* stream cursor
+   (valid because cycle-end pushes guarantee all pre-write reads are
+   already queued).
 
-The number of lines copied by `FBDRV_INLINE` is parameterized by `FB_COPY_LINES` (default 200). Leaving rows untouched lets an app keep a static status bar in the destination ST page that the FB blit never overwrites. `FBDRV_TOTAL_BYTES = FB_COPY_LINES * FB_ROW_BYTES` is divided by `FBDRV_ITER_BYTES = 48` to derive `FBDRV_MAIN_ITERS`; trailing bytes (at most 47) are picked up by a small `d16(a5)` MOVEM tail block emitted via `ifne FBDRV_TAIL_BYTES`. The tail's MOVEM register list must hold exactly `FBDRV_TAIL_BYTES / 4` longwords — at FB_COPY_LINES=200 the tail is 32 B (`d0-d7`); at 199 it's 16 B (`d0-d3`); at 198 it's 0 B (block skipped). Adjust the register list manually when changing FB_COPY_LINES.
+Violating this serves reads against the wrong stream when the driver
+chains remote-DMA arms back-to-back (its normal ring-walking pattern) —
+producing "impossible" corruption that mimics byte-order bugs.
 
-### IKBD pipeline (keyboard input + ESC exit)
+### Data-port serve (the timing-critical core)
+- The data port is one register ($10) but four bus addresses
+  (`$FA2000/2/4/6` → RAM slots `$2001/3/5/7`). Plain polls (`move.b`)
+  always hit slot 0 (~1–2.5 µs apart); the driver's ARP body copy uses
+  **MOVEP.L** — four ascending-address reads in back-to-back ~250 ns
+  cycles that no reactive per-event serve can feed.
+- Therefore the serve stages a **4-byte window** (slot k = stream byte
+  base+k), consumption is slot-aware (`(addr>>1)&3`), and stream
+  advance uses the **group-delta rule**: ascending slot = movep
+  continuation (advance by delta), repeated/lower slot = new access
+  group (advance slot+1). Consumed slots are refilled immediately
+  (always safe — bursts read ascending); the full window restages
+  deferred (~1 µs of quiet) or at stream boundaries.
+- RSAR/RCNT (page 0) are **crtap-owned**: tracked in the write stream in
+  true order, window prestaged at the RSARHI write (µs before the arm).
+  `on_rom3_sample` (commemul) must **skip** page-0 regs $08–$0B — its
+  delayed replay would rewind an advanced stream — and the skip gate
+  must use the **in-stream page** (`chip->cr` bits), not the crtap-side
+  page tracker.
+- On a read arm (CR=$0A via crtap), enter `dataport_serve_burst`
+  **immediately** — any preamble work (draining commemul, diagnostics)
+  delayed burst entry past the driver's first reads and corrupted them.
 
-`userfw.s` owns the Atari ST IKBD ACIA at `$FFFFFC00`/`02` end-to-end, replacing TOS's handlers so the m68k VBL blit runs interrupt-free:
+### NE2000 model (`ne2000.c` — hardware-independent, host-tested)
+- PROM = doubled MAC + `$57` signature. **The driver chooses its whole
+  personality from probe quality**: clean doubled PROM → NE2000 layout
+  (TX page `$40`, ring `$46–$60`); any corruption → NE1000 8-bit
+  fallback (TX `$20`, ring `$26+`). Both layouts are supported (buffer
+  window `$2000–$7FFF`), but a corrupt PROM also corrupts the MAC the
+  driver installs — and a wrong source MAC means every LAN reply is
+  addressed to a MAC the CYW43 filter rejects: **TX appears fine,
+  nothing ever comes back.**
+- 8390 rx header = `[status, next_page, count_lo, count_hi]`
+  (datasheet order; count = frame+CRC, excluding the 4-byte header).
+  A high-first swap once *appeared* correct — it was compensating for
+  the bus-order bug above. Don't repeat that detour.
+- TX upload: the driver arms remote-write with inconsistent RSAR scales;
+  frames are captured **positionally** into `txstage[]` (armed at CR
+  RWRITE, filled per data-port write) — immune to address-scale quirks.
+- Ring delivery validates PSTART/PSTOP/CURR before touching `mem[]`
+  (driver init transients), wraps at the rx ring (not the buffer edge),
+  and has **no delivery pacing** (two historical deadlocks; the
+  ring-full `ISR_OVER` check is the real 8390 semantics — and note the
+  driver's overrun handler does a STOP/loopback/drain dance).
 
-1. **m68k boot stubs 5 IRQ vectors** — HBL (`$68`), Timer-A (`$134`), Timer-C (`$114`), Timer-D (`$110`), and ACIA (`$118`) all point at a 1-instruction `userfw_dummy_irq` (just `rte`). MFP Timer A/C/D are disabled+masked at IERA/IERB so they never fire; HBL is masked by SR=$2300 (IPL=3 blocks IPL≤3). The dummies are defense-in-depth — under normal operation they're unreachable. Timer-B (`$120`) is owned by the audio pipeline (see "Audio pipeline" below), running in /4 delay mode at TBDR=110 → ~5,585 Hz.
-2. **m68k boot configures the IKBD** — `$80 $01` reset → ~110 ms busy-wait for the self-test → `$12` (disable mouse reporting) → `$1A` (disable joysticks). The byte stream is then pure keyboard scancodes (mouse and joystick are intentionally not supported in this template).
-3. **m68k IKBD draining is inlined in `FBDRV_INLINE`** — every `FBDRV_IKBD_POLL_EVERY` macro iterations (default 40, ~1.24 ms apart at FB_COPY_LINES=200), the unrolled blit emits a small poll block: `btst #0, ACIA_KBD_STATUS.w`, and if RX-ready, `move.b ACIA_KBD_DATA.w, d0` + `tst.b (a1, d0.w)` to forward the byte via a cart-bus read at `IKBD_WINDOW_BASE + byte` (`$FB8200..$FB82FF`, md-devops single-byte ABI). One byte read per poll (md-oric pattern — a drain loop would race the MC6850's RX-ready bit which needs ~2 µs to clear). The poll uses A1 / D0 which are both in the MOVEM list and get reloaded on the next iter, so it doesn't disturb A0 (audio cursor) or A7 (SP). IKBD lives in the macro rather than its own IRQ because Timer-B was reassigned to audio — a separate IKBD IRQ would have to fire at >~700 Hz to keep up with IKBD baud, which is too expensive given the audio handler also fires from Timer-B.
-4. **RP captures via commemul** — the existing 32 KB ROM3 DMA ring (`commemul.{c,pio}`) records every read in `$FB0000`–`$FBFFFF`. The main loop drains it with `commemul_poll(ikbd_consume_rom3_sample)`; the callback filters for the `$FB8200..$FB82FF` window and pushes the low byte into a 64-entry raw-byte ring.
-5. **RP demux** (`ikbd_pump()`) classifies each raw byte: `$00..$7F` = key press, `$80..$F1` = key release (scancode = `byte & $7F`), `$F2..$FF` = packet headers from mouse/joystick/status/TOD (discarded since they shouldn't appear in steady state). Decoded events go into a 16-entry key event ring; apps drain via `ikbd_pop_key()`. Scancode `$00` is suppressed (not a valid IKBD key).
-6. **ESC exit** — when the demux dispatches an ESC press (`$01`) followed by an ESC release within 200 ms, it writes `CART_CMD_BOOT_GEM` to the sentinel slot at `__rom_in_ram_start__ + CART_CMD_SENTINEL_OFFSET` via `cart_asM68kLong()` (cart-bus longword byte-swap). The m68k VBL loop polls the sentinel each frame and exits cleanly back to GEM on match.
+### Core split & bridging
+- **Core 1** owns the chip + all bus servicing: hot/cold loop (taps every
+  lap; commemul drain, register restage, RX delivery, TX handoff every
+  64th lap). The entire hot path is RAM-resident (`__not_in_flash_func`
+  / `NE2000_TIME_CRITICAL` — which must include `pico.h`, **not**
+  `pico/platform.h`, which `#error`s). Frame delivery yields to the taps
+  every 64 bytes (`ne2000_set_yield`).
+- **Core 0** owns WiFi/lwIP. The RX tap wraps the STA netif input:
+  queue for Core 1, then chain to lwIP (shared-MAC design — STinG uses
+  the Pico's own CYW43 MAC; lwIP ignores `.242`-destined traffic).
+  SPSC queues both directions; RX consume is zero-copy (peek/advance).
+- **UART logging blocks Core 0** (~87 µs/char at 115200): a long debug
+  line stalls WiFi servicing ~20 ms. Keep diagnostics terse, filter idle
+  spam, or they perturb the very traffic under test (production `make
+  build` removes them entirely — useful as an observer-effect A/B).
 
-The earlier ROM4 + DMA-IRQ-per-read capture route (a first attempt) saturated the Cortex-M0+ during fbdrv blits (~8M cart reads/sec) and silently dropped IKBD bytes; switching to the dedicated commemul DMA ring eliminated the loss. See `project_cart_capture_routes.md` memory note for the trade-off.
+### The driver (STinG `ENEC.STX`)
+Reference source: `EmmanuelKasper/ethernec` (`SRC/NE.S`, `NESTNG.S`,
+`8390.I`); the shipped binary (MD5 `98db4e73…`, 5815 B) is a
+`BUGGY_HW`+debug build but its receive checks match the source:
+status&`$5F`==`$01`, next in [PSTART,PSTOP], count in [64,1518] → else a
+shifted-header recovery path that can mass-resync (BNRY=CURR−1) in ways
+that *look* like normal consumption. `rtrvPckt` type-peeks every
+accepted packet (`0806`→ARP path with a **50-byte ARP buffer cap**;
+`0800`→IP path that aborts early for non-local dst — short body reads on
+broadcasts are normal). Disassembly recipe: GEMDOS header `0x1C`,
+capstone M68K (verify against raw bytes — skipdata desyncs); the ROM3
+write macro composes `(reg<<8|data)` then doubles it.
 
-### Audio pipeline (YM2149 dual-channel PCM)
+## Debugging methodology (what actually worked)
 
-`userfw.s` plays continuous audio out the YM2149 via Timer-B IRQ. The pipeline is conceptually simple: RP fills a 1 KB cart buffer with pre-cooked (vA, vB) volume pairs; m68k Timer-B reads them at ~5,585 Hz and writes both YM volume registers per fire.
+- **Never trust an intended-value log**: capture what was *actually
+  delivered* (`got=` slot content at event time) alongside memory (`b=`)
+  and bookkeeping (`srv=`). All three agreeing is the only "serve OK".
+- The unified R/W event trace (every register read with served value +
+  every write with data, in order) is the driver's complete sensory
+  input — decisive when driver behaviour contradicts its source.
+- Diagnostics print once per boot (`PROM served [...]` is the canary:
+  byte-exact `28 28 cd cd … 57 57` or the boot is compromised) and every
+  2 s (`c1=` heartbeat distinguishes a hung Core 1 from a silent bus).
+- Hardware-test ritual: flash → power-cycle → **confirm the on-screen
+  banner version** → capture UART from power-on → `PING 192.168.1.1`
+  from the ST (never the ST's own address — STinG answers that
+  internally).
+- When deduction and measurement deadlock, run a cheap intervention
+  experiment (e.g. the padding experiment) — its side effects often
+  reveal the real mechanism.
 
-1. **Build-time PCM → YM conversion** (`tools/wav_to_ym4.py`). Source `.SAM` / `.WAV` is downsampled to the target rate and each 8-bit PCM byte is mapped through the **1988 Ghostbusters demo's 64-entry SAMPLE1 LUT** (default `--mode dual-ghost`): the top 6 bits of each PCM byte index a (chA, chB) pair, emitted as 2 bytes per sample. Output is `rp/src/include/audio_sample.h` — a C array embedded in the RP firmware. The Ghostbusters LUT cherry-picks 64 of the ~135 distinct acoustic sums achievable from the YM's log volume curve, giving ~6 effective bits of resolution vs the 4-bit ceiling of single-channel playback. Other modes available: `single-a` (1 byte/sample, ch A only, Ayumi log LUT), `best-pair` (exhaustive search over all 256 pairs), `nibble` (linear truncation), `raw-byte` (passthrough).
-2. **RP fills the cart buffer per VBL** (`rp/src/audio.c`). `audio_render_frame()` paces to ~50 Hz via `time_us_32` and refills the full 1024 B at `CART_AUDIO_BUFFER_OFFSET` (`$FA4100`) with the next slice of the looped jingle. The source pointer advances by `AUDIO_BYTES_PER_VBL = 224` bytes (= 112 samples × 2) each refill — matching the m68k's per-VBL consumption at 5,585 Hz. The buffer is overfilled (1024 B vs ~224 B consumed) as safety headroom for VBL / Timer-B drift.
-3. **m68k VBL handler resets the audio cursor** (`userfw_vbl` in `userfw.s`). On every vsync the handler does `movea.l #AUDIO_BUFFER_ADDR, a0` + `clr.w UFW_VBL_FLAG.w` + `rte`. A0 is the **dedicated Timer-B audio read cursor** — kept out of `FBDRV_INLINE`'s MOVEM list so the IRQ handler doesn't have to save/restore it. The VBL reset is the sync edge: m68k always reads from buffer[0..~223], RP always rewrites buffer[0..1023] each VBL, drift is bounded by the headroom. This replaced the originally-planned A/B double-buffer + `AUDIO_CHUNK_COUNTER` mechanism — VBL-edge resync is simpler and just as click-free.
-4. **m68k Timer-B handler plays the pair** (`userfw_timerb_audio`). MFP Timer-B is in /4 delay mode with TBDR=110 → 5,585.45 Hz, ~112 fires per PAL VBL. Each fire: `move.b (a0)+, $FFFF8802.w` (vA → ch A vol, reg 8 latched on entry) → `move.b #9, $FFFF8800.w` (latch reg 9) → `move.b (a0)+, $FFFF8802.w` (vB → ch B vol) → `move.b #8, $FFFF8800.w` (re-latch reg 8 for next fire) → `rte`. ~68 cyc handler body + ~44 cyc IRQ entry/exit = ~112 cyc/fire = ~1.57 ms/VBL = ~8% of the PAL VBL budget. MFP is in **auto-EOI mode** (VR S=0) so the in-service bit clears automatically per IACK cycle — no software EOI needed in the handler.
-5. **YM boot state** — boot enables channels A + B in the mixer (`MIXER = $FC`, tones on, noise off, periods=0 for a DC pass-through), zeroes both volumes, then latches reg 8 so the first Timer-B fire writes ch A directly.
+## ST-side configuration (known-good)
 
-Tuning knobs:
-- `TIMERB_COUNT` in `userfw.s` controls the audio rate. Raise to slow (longer per-VBL audio slack), lower to speed (better fidelity at higher cost). Must match `AUDIO_BYTES_PER_VBL` in `rp/src/audio.c` (= 2 × fires-per-VBL for dual-channel mode) — otherwise the source pointer drifts.
-- Regenerate `audio_sample.h` at the matching rate via `python tools/wav_to_ym4.py --rate <Hz> --mode dual-ghost <source>` whenever the Timer-B rate changes — otherwise the jingle plays back pitched up/down by the ratio.
-- Audio uses no Atari RAM — the cart buffer at `$FA4100` is the entire I/O path. The handler keeps all state in registers (A0).
-
-### Atari ST side (`target/atarist/`)
-- `src/main.s` — m68k cartridge header + boot dispatcher. Lives at `$FA0000` (ROM4 cartridge region). `pre_auto` (CA_INIT bit 27) runs in supervisor mode, copies `start_rom_code` below ST screen memory, jumps there, checks resolution (high-res falls to GEM with a warning), then **`jmp USERFW` directly** — no terminal command dispatch in the default path. The old `check_commands` / `rom_function` indirection is still defined (for apps that want CMD_START-style handoff from the RP) but unused.
-- **No Atari RAM**: the cartridge code deliberately uses none of the ST's RAM (no `.bss`, no heap). Data lives in registers or the shared region. Adding naive BSS to `userfw.s` will silently corrupt system variables — keep state in `APP_FREE` / `SHARED_VARIABLES`, the cart code itself (which is **read-only** from m68k — writes bus-error), or registers. Key live registers across the `userfw.s` VBL loop: A0 = Timer-B audio read cursor (reset to `AUDIO_BUFFER_ADDR` by `userfw_vbl` each VBL, never in any MOVEM list), A5 = per-VBL FB destination scratch (predec target for `FBDRV_INLINE`), A6 = per-VBL FB source scratch (postinc reader of the cart FB), A7 = SP (also kept out of MOVEM so IRQs stay safe). D0-D7 / A1-A4 are scratch and are clobbered by the MOVEM macro.
-- `src/userfw.s` — **the primary extension point for app-specific m68k code.** `src/userfw.ld` places `main.s` at offset `0x0000` (≤ 2 KB) and `userfw.s` at offset `0x0800` (~6 KB code + the inline `FBDRV_INLINE` macro expansion). The previously-separate `fbdrv.s` module at offset `0x2000` was eliminated: the unrolled MOVEM block is now emitted inline at the userfw entry via the `FBDRV_INLINE` macro, so there's no jsr/rts overhead and no separate hand-written file to maintain. Total cart code ≤ 16 KB (`CARTRIDGE_CODE_SIZE`); current build is ~8.3 KB. `main.s` exposes the userfw entry as `USERFW equ (ROM4_ADDR + $800)`. The default `userfw.s` runs the FB blit + audio + IKBD VBL loop and exits on ESC; replace its body with your own per-frame logic, or extend it.
-- Adding more m68k modules: add a new `.text_<name>` section in `userfw.ld`, mirror the offset with an `equ (ROM4_ADDR + $????)` in `main.s`, and add the `.o` target to `target/atarist/Makefile`.
-- Built via `stcmd make release` (m68k assembler in Docker). A 64 KB padded copy of the BOOT.BIN is then converted to `target_firmware.h` for inclusion in the RP build.
-
-### Shared 64 KB cartridge region
-The Atari ST sees a 64 KB window at `$FA0000`–`$FAFFFF` (mirrored RP-side at `0x20030000`). This is the **single source of truth** for any cross-target data layout — both sides derive every offset symbolically from constants in `rp/src/include/cart_shared.h` (RP-side) and `target/atarist/src/main.s` (m68k side). **Apps must never hard-code an address inside this region** — always reference the named offset/symbol.
-
-| Offset | Symbol | Size | Purpose |
-| --- | --- | --- | --- |
-| `$FA0000` | cartridge image | 16 KB | m68k header + main.s (≤ 2 KB) + userfw.s at `$800` (code + the inline `FBDRV_INLINE` expansion). Read-only from m68k. |
-| `$FA4000` | `CMD_MAGIC_SENTINEL_ADDR` | 4 B | RP→m68k command word (`CMD_NOP`, `CMD_RESET`, `CMD_BOOT_GEM`, `CMD_START`). |
-| `$FA4004` | (reserved) | 8 B | Former RANDOM_TOKEN / RANDOM_TOKEN_SEED slots from the TPROTOCOL handshake; unused since that handshake was removed. |
-| `$FA400C` | `FB_FRAME_COUNTER_ADDR` | 4 B | RP-incremented dirty-frame counter; `userfw.s` only blits when this changes. |
-| `$FA4010` | `SHARED_VARIABLES` | 240 B | 60 × 4 B indexed slots. **Slots 12–19 are the palette below — not free.** The other 52 slots are free for apps. |
-| `$FA4040` | `PALETTE` (`CART_PALETTE_OFFSET` / `PALETTE_ADDR`) | 32 B | 16 ST colour words (`0000.0RRR.0GGG.0BBB`) inside `SHARED_VARIABLES` slots 12–19. The m68k VBL handler copies these to `$FFFF8240..$FFFF825E` every frame, so the RP owns the palette. Leave it zeroed (= all-black) and write `$FFFF8240` from your own m68k code if you'd rather drive it yourself. |
-| `$FA4100` | `AUDIO_BUFFER_ADDR` | 1024 B | Audio buffer. Single contiguous block — the originally-planned A/B double-buffer collapsed into one buffer once we chose VBL-edge resync (m68k VBL handler resets A0 to buffer base every frame; RP refills the whole 1024 B per VBL). Default content: dual-channel Ghostbusters-LUT pairs at ~5,585 Hz (~224 B/VBL consumed; 800 B of headroom). |
-| `$FA4500` | `APP_FREE_ADDR` | ~15.5 KB | contiguous arena for app buffers, ends at FRAMEBUFFER. Apps that disable the audio pipeline can reclaim the 1 KB at `$FA4100`. |
-| `$FA8300` | `FRAMEBUFFER_ADDR` | 32000 B | 320×200×4bpp color framebuffer. Top of the region so an overrun walks off the end of the 64 KB window instead of corrupting the metadata block. Read by `FBDRV_INLINE` every VBL. |
-
-### RP2040 side (`rp/src/`)
-- `main.c` — only sets clock/voltage, calls `gconfig_init` (global config) then `aconfig_init` (per-app config), and hands off to `emul_start()`. If config init fails it jumps to the **Booster** app via `reset_jump_to_booster()` to bootstrap. **Don't add features to `main.c`** — put them in `emul.c` or a new module.
-- `emul.c` / `emul.h` — the application's main loop and entry point. ~100 lines: erase + copy firmware to RAM, init IKBD ring, init romemul, init fb, init commemul, mount SD, configure SELECT, bring up the demo dispatcher (`demo_dispatcher_init()`), then loop `{fb_pump_rom3(); ikbd_pump(); drain key events → demo_dispatcher_handle_key(); demo_dispatcher_render_frame(); audio_render_frame();}`. `fb_pump_rom3()` (in `fb.c`) is the public wrapper that drains the ROM3 ring via `commemul_poll(fb_rom3_dispatch)` for IKBD demux + VBL frame-sync. The demo dispatcher (`demo_menu.c`) is the per-frame render driver; apps add foreground work inside that loop.
-- `fb.c` / `fb.h` — **owns the 32 KB planar framebuffer at `$FA8300` + the boot-time framebuffer setup.** `fb_init(&fb_mode_320x200)` populates `fb_screen` (pointer + width + height + bpp), calls `fb_chunked_init()` (which launches Core 1), builds the demo sprite, clears the planar FB to 0xFF (= palette index 15 = black on default TOS palette), and renders the initial frame. `fb_render_static()` / `fb_render_frame()` are the **legacy template render** (title + ESC hint + a bouncing sprite); they now only paint the initial frame — the per-frame loop is driven by the demo dispatcher (`demo_menu.c`), not `fb_render_frame`. `fb_publish()` (the VBL-synced transpose + cart-FB publish) is the call every demo uses.
-- `fb_chunked.c` / `fb_chunked.h` — **chunked off-screen buffer + dual-core publish dispatcher.** `fb_chunked_buffer[320 * 200]` is the byte-per-pixel render target apps draw into. `fb_chunked_init()` launches Core 1 with `fb_core1_loop`, a **generic job dispatcher**: `fb_core1_dispatch(fn, arg)` hands a function+arg to the parked Core 1 over the inter-core FIFO and `fb_core1_wait()` joins — the c2p bottom half and demos' own dual-core work both ride this one path. `fb_chunky_to_planar(planar)` runs c2p into `fb_planar_scratch` (32 KB in RP RAM, natural row-major planar layout) using both cores, then publishes scratch → cart FB via the `fb_chunk_reverse_copy48` Thumb asm worker (chunk-reversed `ldmia/stmia`) so the m68k's predec MOVEM blit lands each 48-byte chunk at its natural image position. The chunk-reversal mapping is specified in `cart_shared.h`.
-- `fb_chunked_asm.S` — **hand-written Thumb assembly worker.** `fb_c2p_half(dst, src, src_end)` processes a chunked range using a multiplication-based bit transpose (`((q & 0x01010101) * 0x80402010) >> 28` packs a 4-pixel plane bit into a nibble in one MUL). Writes natural row-major planar output to `dst` — chunk reversal happens in the dispatcher (`fb_chunky_to_planar`), not the worker. Both cores execute this same code on their respective halves. No LUTs in scratch; only two 32-bit constants in registers.
-- `fb_font.c` / `fb_font.h` — text primitives. `font_set_font(&font6x8)`, `font_set_color(0)` for palette-index-0 (white on default TOS), `font_move(x, y)`, `font_print(str)`. `render_text` writes single bytes into `fb_chunked_buffer` (no LUT, no plane math) so the cart-bus byte-swap is irrelevant at the font layer.
-- `fb_blit.c` / `fb_blit.h` / `fb_blit_asm.S` — bitmap / sprite primitives. `fb_fill_rect(x, y, w, h, color)`, `fb_blit(bm, dst_x, dst_y)` (opaque memcpy per row), `fb_blit_key(bm, dst_x, dst_y, key)` (color-key transparent sprite, inner row in the `fb_blit_key_row` Thumb asm). `_band` variants (`fb_blit_band` / `fb_blit_key_band`) clip vertically to `[y0, y1)` so two cores can render disjoint screen bands. All target the chunked buffer.
-- `font6x8.h` — 6×8 ASCII font data + the `FB_FONT font6x8` instance definition. Include from exactly one .c file (currently `fb.c`) to avoid multiple-definition link errors.
-- **Demo suite** (`demo_menu.c` + `demo_*.c`) — an animated boot menu over four self-contained demos, each a worked example of "draw into the chunked buffer, publish via `fb_publish`". `demo_menu.c` is the dispatcher (MENU ⇄ ACTIVE state machine; up/down + Return or the number keys launch the highlighted demo, ESC backs out / second ESC exits to GEM) and defines the `demo_module_t` interface in `demo.h` (`init` / `render_frame` / `handle_key` / `teardown`) plus the shared `g_show_timing` flag — the hidden `D` key toggles the DRAW/C2P readout in the menu and every demo. The menu is itself a demo: two SidecarTridge logos rotozoomed (INTERP0 texel addressing) with colour-cycling "beating" palettes that dip to black, generated from PNGs by `tools/png_to_texture.py` (`sidecart_logo.h` / `sidecart_text.h`). The demos: `demo_parallax.c` (Uridium-style 3-layer scroll), `demo_3d.c` + `solid3d.h` (flat-shaded geodesic-sphere vector object), `demo_sprites.c` (auto-scaling sprite swarm), `demo_cojorotozoom.c` (full-screen logo rotozoom). They're the reference for the optimization techniques worth copying into new apps: per-file `#pragma GCC optimize("O3")` on hot compute files, `__not_in_flash_func()` on per-frame loops, 8.8 fixed-point with sin/cos LUTs + power-of-two `&`-mask tiling, the SIO **interpolator** in texture-mapping mode (`demo_cojorotozoom.c`), and the **dual-core band split** via `fb_core1_dispatch` + the `_band` blits (`demo_sprites.c`).
-- `romemul.c` / `romemul.pio` — PIO programs and the runtime that emulates the cartridge ROM/RAM bus to the Atari (driven by `READ_*` / `WRITE_*` GPIOs defined in `include/constants.h`).
-- `commemul.c` / `commemul.pio` — **ROM3 cart-bus capture ring; the primary extension point for reading anything the m68k forwards via cart reads in `$FB0000`–`$FBFFFF`.** `commemul_init()` starts a PIO+DMA chain that records every ROM3 read into a 32 KB ring buffer with no CPU/IRQ involvement. The main loop drains it via `commemul_poll(callback)`; each captured 16-bit sample is the cart-bus address that was read (low byte typically carries the payload, high byte the discriminator window — see `ikbd.c` for the canonical example at `$FB8200..$FB82FF`). The upstream `chandler.c` + `tprotocol.h` command-dispatch layer that previously sat on top of commemul was removed — apps that need a multi-byte command channel can wrap `commemul_poll` with their own callback.
-- `gconfig.c` / `aconfig.c` — global vs per-app configuration stored in dedicated flash sectors, on top of `settings/` (a key-value store). The global-config defaults in `gconfig.c` mirror the Booster app and include WiFi parameters even though this template no longer brings up networking — **do not trim them**.
-- `sdcard.c`, `hw_config.c` — FatFs over SPI/SDIO via the bundled `fatfs-sdk`.
-- `select.c`, `reset.c` — SELECT-button handling, soft reset/jump-to-booster.
-- `ikbd.c` / `ikbd.h` — IKBD keyboard ingest + demux. Chained off `commemul_poll` in the main loop; filters the `$FB8200..$FB82FF` window and decodes scancodes into a key-event ring (`ikbd_pop_key`). ESC press+release within 200 ms signals m68k exit via `CART_CMD_BOOT_GEM`. See `cart_shared.h` for the shared-region constants.
-
-The `display.c` / `term.c` / `u8g2/` subsystem from upstream `md-microfirmware-template` was deleted — the framebuffer template's UI is just "draw into `fb_screen`".
-
-### Memory layout (`rp/src/memmap_rp.ld`)
-The RP2040's 2 MB flash is sliced into named regions, and code is responsible for not stomping on them:
-
-| Region | Origin | Length | Purpose |
-| --- | --- | --- | --- |
-| `FLASH` | `0x10000000` | 1024 K | App code |
-| `ROM_TEMP` | `0x10100000` | 128 K | Scratch area for loaded ROMs |
-| `BOOSTER_APP_FLASH` | `0x10120000` | 768 K | Reserved for the Booster app (do not write from this app) |
-| `CONFIG_FLASH` | `0x101E0000` | 120 K | 30 sectors of per-app config |
-| `GLOBAL_LOOKUP_FLASH` | `0x101FE000` | 4 K | UUID → config-sector lookup |
-| `GLOBAL_CONFIG_FLASH` | `0x101FF000` | 4 K | Global config |
-| `RAM` | `0x20000000` | 128 K | Normal RAM |
-| `ROM_IN_RAM` | `0x20020000` | 128 K | ROM data mirrored to RAM for fast bus access |
-
-The build assumes Core 0 owns flash writes (`PICO_FLASH_ASSUME_CORE0_SAFE=1`). The PIO bus emulation runs hot — Core 0 also overclocks to 225 MHz at `VREG_VOLTAGE_1_10`. **Core 1 is owned by `fb_c2p_core1_loop`** (the chunky-to-planar bottom-half worker, see `fb_chunked.c`); apps that want Core 1 for other purposes need to replace that worker or refactor the conversion pipeline.
-
-### App identity
-`CURRENT_APP_UUID_KEY` (set from the `APP_UUID_KEY` env var at CMake time, with a placeholder default) is the app's UUID4. It must match the `uuid` field in `desc/app.json` and is used as the key into `GLOBAL_LOOKUP_FLASH` to find this app's config sector. Mismatch → app jumps to Booster.
+- STinG port IP lives in **STNGPORT.CPX** (saved to `STING.PRT` —
+  check the hex: a mis-saved netmask `fffcff00` cost a day);
+  `ROUTE.TAB` needs `192.168.1.0 → EtherNet 0.0.0.0` + default via the
+  router, TAB-separated. `NAMESERVER` in `DEFAULT.CFG` must be set
+  before DNS tests. Only `ENEC.STX` active (`ENEC_DBG.ST_` disabled).
+- Reserve the ST's static IP in the router's DHCP settings.
+- Warm-reset caveat: after `mdnet_activate()` repaints the register map,
+  the cartridge magic is gone — a warm ST reset boots without the
+  banner (networking still works); power-cycle the SidecarT to see it.
+- Boot-time SELECT→Booster (in `main.c`) works; runtime SELECT reset
+  callbacks are deliberately not wired (spurious edges killed sessions).
 
 ## Editing guardrails
 
-- **Never modify** `pico-sdk/`, `pico-extras/`, or `fatfs-sdk/` — they are git submodules pinned to specific upstream revisions, and the build re-pins them on every run. To change FatFs configuration, edit `rp/src/ff/ffconf.h` (project-owned override); the include path is set up so this file wins over the submodule's default.
-- Don't touch `main.c` for feature work — start in `emul.c`.
-- Match the existing C style (clang-format config in `.clang-format`, clang-tidy in `.clang-tidy` — both wired up via CMake when the binaries are on `PATH`).
+- **Never modify** `pico-sdk/`, `pico-extras/`, or `fatfs-sdk/`
+  (pinned submodules; FatFs config override lives at `rp/src/ff/ffconf.h`).
+- Don't add features to `main.c` — start in `emul.c` / `mdnet.c`.
+- Match the existing C style (`.clang-format` / `.clang-tidy`).
 
 ---
 
@@ -220,6 +255,9 @@ Minimum code that solves the problem. Nothing speculative.
 - If you write 200 lines and it could be 50, rewrite it.
 
 Ask: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+In this repo specifically: reactive timing patches accrete — when a
+serve/timing mechanism grows a fifth special case, stop patching and
+re-derive the invariant it should enforce.
 
 ### 3. Surgical changes
 
@@ -235,11 +273,9 @@ The test: every changed line should trace directly to the user's request.
 ### 4. Goal-driven execution
 
 Define success criteria. Loop until verified.
-- "Add validation" → "Write tests for invalid inputs, then make them pass"
-- "Fix the bug" → "Write a test that reproduces it, then make it pass"
-- "Refactor X" → "Ensure tests pass before and after"
-
-For multi-step tasks, state a brief plan with a verification check per step.
+- For this repo: "fixed" means **verified on hardware** (banner-checked
+  build, UART evidence), not "builds and the theory is sound". Host
+  tests gate model changes; only the ST proves serve/timing changes.
 
 ### 5. No AI attribution
 
