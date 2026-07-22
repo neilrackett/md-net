@@ -314,14 +314,7 @@ bool ne2000_deliver_rx(ne2000_t *chip, const uint8_t *frame, uint16_t len) {
   // Pad to the 60-byte Ethernet minimum, then append a 4-byte CRC slot the
   // driver discards; the on-ring frame is (padded frame + CRC).
   //
-  // EXPERIMENT (v0.1.47): pad small frames to 252 so the 8390 count is
-  // 256. This replicates the ONE configuration that got STinG to resolve
-  // ARP and stream ICMP (v0.1.43) -- now on a serve verified byte-exact
-  // (srv==b==got everywhere), which v0.1.43 lacked. If ARP resolves, the
-  // driver has a small-packet/count threshold and we craft the minimal
-  // real fix; if not, count is eliminated. Ethernet-legal: ARP/IP ignore
-  // trailing pad.
-  uint16_t frame_len = len < 252u ? 252u : len;
+  uint16_t frame_len = len < 60u ? 60u : len;
   // The 8390 header's byte-count field is the frame data FOLLOWING the
   // header, including CRC and EXCLUDING the 4 header bytes -- the EtherNEC
   // driver reads exactly this many bytes and rejects >1518 (see NE.S
