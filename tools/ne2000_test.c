@@ -164,7 +164,10 @@ static void test_rx_roundtrip(void) {
   assert(next == chip.curr && "header next-page == CURR");
   // count = frame + CRC, excluding the 4-byte header (what the driver
   // reads as the body length) = max(len,60) + 4 = 100 + 4 = 104.
-  assert(count == 104 && "header byte count");
+  // Experimental accept-rule padding: small frames are padded to 252
+  // bytes (count 256) -- see deliver_rx. A 100-byte frame therefore
+  // carries count 256, not 104.
+  assert(count == 256 && "header byte count (incl. experiment padding)");
   assert(next >= NE2000_RX_START_PAGE && next <= NE2000_STOP_PAGE);
 
   // Read the frame body and check the first bytes match.
