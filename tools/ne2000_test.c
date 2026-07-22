@@ -156,18 +156,16 @@ static void test_rx_roundtrip(void) {
   wr(&chip, R_CR, CR_RREAD | CR_START);
   uint8_t status = rd(&chip, R_DATA);
   uint8_t next = rd(&chip, R_DATA);
+  uint8_t cnt_hi = rd(&chip, R_DATA);  // HIGH first (empirical driver order)
   uint8_t cnt_lo = rd(&chip, R_DATA);
-  uint8_t cnt_hi = rd(&chip, R_DATA);
   uint16_t count = (uint16_t)(cnt_lo | (cnt_hi << 8));
 
   assert(status == 0x01 && "RSR = ENRSR_RXOK");
   assert(next == chip.curr && "header next-page == CURR");
   // count = frame + CRC, excluding the 4-byte header (what the driver
   // reads as the body length) = max(len,60) + 4 = 100 + 4 = 104.
-  // Experimental accept-rule padding: small frames are padded to 252
-  // bytes (count 256) -- see deliver_rx. A 100-byte frame therefore
-  // carries count 256, not 104.
-  assert(count == 256 && "header byte count (incl. experiment padding)");
+  // count = frame + CRC, excluding the 4-byte header = max(len,60)+4.
+  assert(count == 104 && "header byte count");
   assert(next >= NE2000_RX_START_PAGE && next <= NE2000_STOP_PAGE);
 
   // Read the frame body and check the first bytes match.

@@ -314,13 +314,7 @@ bool ne2000_deliver_rx(ne2000_t *chip, const uint8_t *frame, uint16_t len) {
   // Pad to the 60-byte Ethernet minimum, then append a 4-byte CRC slot the
   // driver discards; the on-ring frame is (padded frame + CRC).
   //
-  // EXPERIMENT (empirical accept-rule bracket): every packet this
-  // driver build has body-armed had a header count >= 256 (hi byte 01);
-  // every count < 256 was header-skipped, despite delivered bytes and
-  // the disassembled checks both being verified. Pad small frames to
-  // 252 so their count is exactly 256 -- Ethernet-legal (ARP/IP ignore
-  // trailing pad) and matching the known-accepted shape.
-  uint16_t frame_len = len < 252u ? 252u : len;
+  uint16_t frame_len = len < 60u ? 60u : len;
   // The 8390 header's byte-count field is the frame data FOLLOWING the
   // header, including CRC and EXCLUDING the 4 header bytes -- the EtherNEC
   // driver reads exactly this many bytes and rejects >1518 (see NE.S
@@ -379,11 +373,18 @@ bool ne2000_deliver_rx(ne2000_t *chip, const uint8_t *frame, uint16_t len) {
   // mem[(P - $40) * 256].
   uint16_t off =
       (uint16_t)((start_page - NE2000_RING_FIRST_PAGE) * NE2000_PAGE_SIZE);
+  // Count byte order: HIGH byte first. The 8390 datasheet says low/high,
+  // and the driver disassembly appears to read it that way -- but the
+  // padding experiment settled it empirically: headers written low/high
+  // made the driver compute count=(byte2<<8)|byte3 (256 -> 1, big frames
+  // -> junk) and fall into its shifted-header recovery, while its
+  // recovered counts and body arms all fit the high-first layout. The
+  // machine outvotes the disassembly.
   uint8_t header[4] = {
       0x01u,                            // RSR: ENRSR_RXOK
       next_page,                        // next packet page
+      (uint8_t)((count >> 8) & 0xFFu),  // count HIGH first (see above)
       (uint8_t)(count & 0xFFu),         // count low
-      (uint8_t)((count >> 8) & 0xFFu),  // count high
   };
   ring_write(chip, &off, header, 4u);
   ring_write(chip, &off, frame, len);   // real received bytes
