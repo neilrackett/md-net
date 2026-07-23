@@ -593,6 +593,19 @@ void mdnet_poll(void) {
                 txbuf[30], txbuf[31]);
       }
     }
+    // Source-MAC fixup: STinG may have installed a garbled MAC on a
+    // corrupt-PROM boot; if it transmits from that phantom address the
+    // WiFi can never return replies. Force every outbound frame to carry
+    // our real STA MAC -- the L2 source (6..11) and, for ARP, the payload
+    // sender-hardware field (22..27) -- so replies always come back to us
+    // and the router caches STinG's IP against the real MAC. Makes the
+    // bridge robust to the intermittent boot-MAC corruption.
+    if (t >= 12u && s_ourMacValid) {
+      memcpy(&txbuf[6], (const uint8_t *)s_ourMac, 6);
+      if (t >= 42u && txbuf[12] == 0x08u && txbuf[13] == 0x06u) {
+        memcpy(&txbuf[22], (const uint8_t *)s_ourMac, 6);
+      }
+    }
     int err = cyw43_send_ethernet(&cyw43_state, CYW43_ITF_STA, t, txbuf, false);
     if (err != 0) {
       DPRINTF("mdnet TX %u bytes failed: %d\n", (unsigned)t, err);
