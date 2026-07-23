@@ -17,12 +17,43 @@ Real-world NetUSBee + STinG setups reach FTP, HTTP and general internet use, and
 
 > ### ⚠️ Work in progress
 >
-> MD/Net is under active development. **What works today:** the firmware
-> joins your WiFi network at boot and the ST prints `MD/Net connected: <IP>`
-> before continuing to GEM. **In progress:** the NE2000 register emulation
-> and the packet bridge that let STinG send and receive. See
-> [docs/ne2000-emulation.md](docs/ne2000-emulation.md) for the design and
-> current status.
+> MD/Net is under active development, and the NE2000 emulation approach on
+> this branch is **paused short of working ping**. Where it stands:
+>
+> **Working and hardware-verified:**
+> - WiFi bootstrap: the ST prints `MD/Net connected: <IP>` at boot, then GEM.
+> - The full NE2000 probe: STinG's EtherNEC driver detects the "card",
+>   reads a byte-exact MAC PROM, and selects the NE2000 personality.
+> - Register file, remote-DMA ring walking, BNRY/CURR bookkeeping.
+> - Transmit end-to-end: STinG's ARP requests and ICMP leave over WiFi.
+> - Receive delivery: LAN frames land in the ring; the driver reads
+>   headers and bodies with verified byte-exact serves on most traffic.
+>
+> **Not working:** one residual serve corruption remains on ARP-reply
+> body reads (a single byte, `hardware_space`, intermittently serves a
+> stale window byte), so STinG's `process_arp` rejects every reply as
+> malformed, ARP never resolves, and ping shows 100% loss.
+>
+> **What a fix needs:** the remote-DMA data-port serve must deliver
+> byte-exact streams under *every* m68k access pattern (movep bursts,
+> polled reads, chained re-arms) with zero mid-stream staleness. The
+> current design (PIO tap + 4-slot pre-staged window + bus-order
+> barriers, see [docs/ne2000-emulation.md](docs/ne2000-emulation.md))
+> got asymptotically close — the remaining bug is a timing interaction
+> between window prestaging and the driver's header→body arm sequence.
+> A hardware-accurate fix likely wants the serve done *entirely in PIO*
+> (address-indexed stream serving without CPU-in-the-loop), or a
+> logic-analyzer capture to pin the exact cycle interleaving.
+>
+> Also hard-won and documented in `AGENTS.md`: this specific `ENEC.STX`
+> binary (a BUGGY_HW debug build) reads the 8390 header count
+> **high-byte-first**, opposite to the datasheet — headers must be
+> written to match or every packet detours into its recovery path.
+>
+> **The active approach now lives on the `stx` branch:** a custom
+> STinG driver (`MDNET.STX`) that talks to the RP over a simple
+> mailbox protocol instead of NE2000 emulation — trading NetUSBee
+> fidelity for robustness (and enabling DHCP).
 
 ## Hardware requirements
 

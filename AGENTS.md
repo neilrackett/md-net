@@ -34,10 +34,40 @@ the WiFi stack (`network.c`, lwIP) restored from
 
 Milestones: **v0.1.0** — WiFi bootstrap, `Cconws` boot banner
 ("MD/Net connected: <IP>"), return to GEM (done, hardware-validated).
-**v0.2.0** — full NE2000 emulation + packet bridge (in progress; tag
-only when ping/FTP work on hardware). The minor version bumps per
-milestone; **every `make debug` auto-bumps the patch** so each flashed
-image is identifiable.
+**v0.2.0** — working ST networking (ping/FTP on hardware). The minor
+version bumps per milestone; **every `make debug` auto-bumps the patch**
+so each flashed image is identifiable.
+
+## ⚠️ Branch strategy: `netusbee` (paused) vs `stx` (active)
+
+The NE2000-emulation approach lives on the **`netusbee`** branch and is
+**paused short of working ping** (~50 hardware-tested builds). Status:
+probe/PROM/MAC byte-exact; register file, ring walking, BNRY/CURR all
+correct; TX end-to-end over WiFi (ARP requests + ICMP verified leaving);
+RX delivery + header reads verified byte-exact (`srv==b==got`); the
+driver runs its PRIMARY receive path with sane lengths once headers are
+written count-high-first. The single remaining defect: ARP-reply body
+reads intermittently serve one stale byte (offset 3, the ARP
+`hardware_space` field, serving `40` instead of `01`) — STinG's
+`process_arp` rejects the reply as "funny ARP", ARP never resolves,
+ping is 100% lost. IP-packet body reads of the same sizes are clean, so
+it is a timing interaction specific to the header→body chained-arm
+sequence, not a general corruption. A fix likely needs the data-port
+serve moved fully into PIO (no CPU in the serve loop) or a
+logic-analyzer capture of the exact bus interleaving. Do not burn more
+build-flash-test cycles guessing: the diagnosis loop hit diminishing
+returns — three "certain" root causes in a row were falsified on
+hardware before the current understanding stabilized.
+
+The **`stx`** branch is the active approach: a custom STinG driver
+(`MDNET.STX`, port name "WiFi") talking to the RP over a purpose-built
+cart-bus mailbox instead of NE2000 register emulation. It reuses the
+WiFi bridge and everything learned about STinG (below); it drops the
+timing-critical serve entirely. DHCP for the ST becomes possible (the
+RP can acquire a lease on the ST's behalf and hand STinG its config at
+driver init). Base the driver on the EtherNEC STinG driver source
+(`EmmanuelKasper/ethernec`: `ENESTNG.C` implements the full STX port
+API -- `my_send` / `my_receive` / `my_set_state` / `my_cntrl`).
 
 ## Build
 
