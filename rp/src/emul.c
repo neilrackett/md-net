@@ -28,7 +28,7 @@
 #include "debug.h"
 #include "ff.h"
 #include "gconfig.h"
-#include "mdnet.h"
+#include "mailbox.h"
 #include "memfunc.h"
 #include "network.h"
 #include "pico/stdlib.h"
@@ -143,21 +143,20 @@ void emul_start() {
   }
   DPRINTF("%s", msg);
 
-  // Bring up the NE2000 model and switch the ROM4 mirror to its
-  // register-read staging map. The ST has shown the boot message and
-  // continued to GEM by now, so repainting the (already-relocated)
-  // cartridge image is safe -- see docs/ne2000-emulation.md for the
-  // warm-reset caveat.
-  mdnet_init();
-  mdnet_activate();
+  // Bring up the cart-bus mailbox: publishes the protocol magic, MAC
+  // and network config into the ROM4 window and installs the WiFi RX
+  // tap. The cartridge image (banner + magic) is left intact -- the
+  // mailbox fields live outside it, so even a warm reset still boots
+  // with the banner.
+  mailbox_init();
 
-  // Idle loop: drain the cartridge bus into the NE2000 model, run the
-  // packet bridge, service lwIP/cyw43 and the SELECT button. Kept tight
-  // (short cyw43 wait) so commemul is drained and the register map
-  // re-staged fast enough for the driver's probe/poll cadence.
+  // Idle loop: drain the ROM3 command ring into the mailbox, publish
+  // queued RX frames, service lwIP/cyw43 and the SELECT button. Nothing
+  // here is timing-critical: the DMA ring absorbs bus bursts and ROM4
+  // reads are served from static RAM by romemul.
   DPRINTF("Entering main loop\n");
   while (true) {
-    mdnet_poll();
+    mailbox_poll();
     network_safePoll();
     cyw43_arch_wait_for_work_until(make_timeout_time_ms(1));
     select_checkPushReset();

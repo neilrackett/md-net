@@ -94,17 +94,14 @@ add_executable(${PROJECT_NAME}
 
 pico_generate_pio_header(${PROJECT_NAME} ${CMAKE_CURRENT_LIST_DIR}/romemul.pio)
 pico_generate_pio_header(${PROJECT_NAME} ${CMAKE_CURRENT_LIST_DIR}/commemul.pio)
-pico_generate_pio_header(${PROJECT_NAME} ${CMAKE_CURRENT_LIST_DIR}/dataport.pio)
 
 target_sources(${PROJECT_NAME} PRIVATE
         aconfig.c
         commemul.c
-        dataport.c
         emul.c
         gconfig.c
         hw_config.c
-        mdnet.c
-        ne2000.c
+        mailbox.c
         network.c
         reset.c
         romemul.c

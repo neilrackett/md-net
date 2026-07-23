@@ -76,6 +76,12 @@ make debug    # debug build, UART logging on, bumps patch version
 make build    # production build, UART off, SKIP_VERSION_BUMP=1
 ```
 
+Every build now also produces **`dist/MDNET.STX`** — the custom STinG
+driver (see `target/atarist/stx/`), compiled with the
+`m68k-atari-mint-gcc` cross toolchain inside the same atarist-toolkit
+Docker image. The user installs it in the ST's `STING` folder (with
+`ENEC.STX` removed/disabled) and selects the "WiFi" port in STNGPORT.CPX.
+
 Requirements: ARM GNU toolchain (`PICO_TOOLCHAIN_PATH`),
 `atarist-toolkit-docker` (`stcmd`) for the m68k cartridge stub — **Docker
 must be running** — and the pinned submodules (pico-sdk 2.2.0 etc.,
@@ -100,9 +106,10 @@ re-pinned by the build).
 - Never grep build logs through filters that exclude `pico-sdk` paths
   when hunting errors — compile errors triggered *inside* SDK headers
   carry SDK paths and vanish from the filtered view.
-- Host-side model tests: `cc -Irp/src/include -o /tmp/t
-  tools/ne2000_test.c rp/src/ne2000.c && /tmp/t` — run them after any
-  `ne2000.c` change; they encode driver-observed behaviours.
+- Host-side mailbox tests: `cc -DMAILBOX_HOST_TEST -Irp/src/include -o
+  /tmp/t tools/mailbox_test.c rp/src/mailbox.c && /tmp/t` — run them
+  after any `mailbox.c` change. (The netusbee branch keeps the NE2000
+  model tests.)
 
 ## Architecture
 

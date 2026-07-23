@@ -47,6 +47,20 @@ cd target/atarist
 cd ../..
 echo "Done building target project"
 
+# Build the STinG driver (MDNET.STX) with the m68k-atari-mint GCC cross
+# toolchain from the same atarist-toolkit Docker image. Ships in dist/
+# next to the UF2 -- the user copies it to the ST's STING folder.
+echo "Building MDNET.STX (STinG driver)"
+docker run --rm -v "$SCRIPT_DIR/target/atarist/stx:/work" -w /work \
+    --entrypoint sh "${STCMD_IMAGE:-neilrackett/atarist-toolkit-docker-arm64:1.2.1}" \
+    -c 'make clean >/dev/null && make'
+if [ ! -f target/atarist/stx/MDNET.STX ]; then
+    echo "ERROR: MDNET.STX not produced. Aborting."
+    exit 1
+fi
+cp target/atarist/stx/MDNET.STX dist/MDNET.STX
+echo "Done building MDNET.STX"
+
 # Build the rp project in the RP architecture
 echo "Building rp project"
 cd rp
