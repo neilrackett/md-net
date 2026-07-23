@@ -156,8 +156,8 @@ static void test_rx_roundtrip(void) {
   wr(&chip, R_CR, CR_RREAD | CR_START);
   uint8_t status = rd(&chip, R_DATA);
   uint8_t next = rd(&chip, R_DATA);
+  uint8_t cnt_hi = rd(&chip, R_DATA);  // this driver reads count high-first
   uint8_t cnt_lo = rd(&chip, R_DATA);
-  uint8_t cnt_hi = rd(&chip, R_DATA);
   uint16_t count = (uint16_t)(cnt_lo | (cnt_hi << 8));
 
   assert(status == 0x01 && "RSR = ENRSR_RXOK");

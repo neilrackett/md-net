@@ -373,17 +373,20 @@ bool ne2000_deliver_rx(ne2000_t *chip, const uint8_t *frame, uint16_t len) {
   // mem[(P - $40) * 256].
   uint16_t off =
       (uint16_t)((start_page - NE2000_RING_FIRST_PAGE) * NE2000_PAGE_SIZE);
-  // Count byte order: LOW byte first, per the 8390 datasheet and the
-  // driver disassembly. (A temporary high-first swap once appeared to
-  // work: the serve was delivering header bytes 2/3 out of order during
-  // chained arms -- a bus-ordering bug since fixed at the tap layer --
-  // and the swap was compensating for it. With delivery order enforced,
-  // the datasheet order is correct.)
+  // Count byte order: HIGH byte first. The 8390 datasheet specifies
+  // low/high, but THIS driver binary (a BUGGY_HW build) demonstrably
+  // reads it high-first: with low-first bytes, its rx path computed an
+  // out-of-range count (fa 00 -> 0xfa00) and dropped into the shifted-
+  // header recovery path on every packet -- visible as reconstructed
+  // body read-counts (e.g. 806 for a 250-byte frame) that match nothing
+  // we wrote. High-first is also the order under which ICMP once flowed
+  // (though on a then-corrupt serve). This build pairs high-first with
+  // the now-verified byte-exact serve for the first time.
   uint8_t header[4] = {
       0x01u,                            // RSR: ENRSR_RXOK
       next_page,                        // next packet page
+      (uint8_t)((count >> 8) & 0xFFu),  // count HIGH first (driver order)
       (uint8_t)(count & 0xFFu),         // count low
-      (uint8_t)((count >> 8) & 0xFFu),  // count high
   };
   ring_write(chip, &off, header, 4u);
   ring_write(chip, &off, frame, len);   // real received bytes
