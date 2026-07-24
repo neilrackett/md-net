@@ -39,9 +39,16 @@ static inline volatile uint8_t *rom4(void) {
 #endif
 
 static inline void mb_w8(uint32_t off, uint8_t v) { rom4()[off ^ 1u] = v; }
+
+// 16-bit publish, ATOMICALLY. A little-endian store at the (even) RP
+// offset lands the low byte at off and the high byte at off+1, which
+// the cart bus swap presents to the m68k as a correct big-endian word --
+// and it is a single store, so the ST can never observe a half-updated
+// value. Two byte stores would tear: the RX sequence crossing 255->256
+// could be read as 511, whose low byte then acks a sequence the RP
+// never published, wedging the publish handshake for good.
 static inline void mb_w16(uint32_t off, uint16_t v) {
-  mb_w8(off, (uint8_t)(v >> 8));
-  mb_w8(off + 1u, (uint8_t)v);
+  *(volatile uint16_t *)&rom4()[off] = v;  // off must be even
 }
 static inline void mb_w32(uint32_t off, uint32_t v) {
   mb_w16(off, (uint16_t)(v >> 16));
@@ -94,8 +101,20 @@ static uint16_t rxq_depth(void) {
 // Publish the next queued frame into the window. Only called when the
 // previous publication has been acked, so the buffer is never rewritten
 // while the ST may still be reading it.
-static void mailbox_publish_next(void) {
-  uint16_t t = s_rxq.tail;
+#ifdef MAILBOX_HOST_TEST
+void mailbox_publish_next(void);  // host test drives this directly
+#else
+static
+#endif
+void mailbox_publish_next(void) {
+  uint16_t t;
+  // THE protocol invariant, enforced here rather than at the call site:
+  // the window is never rewritten while a publication is unacked, so
+  // the ST can copy it at its leisure with no timing constraint at all.
+  if (s_rxOutstanding) {
+    return;
+  }
+  t = s_rxq.tail;
   if (t == s_rxq.head) {
     return;  // nothing queued
   }
@@ -184,14 +203,30 @@ void mailbox_on_rom3_sample(uint16_t sample) {
       }
       break;
     case MBC_DRIVER_HELLO:
-      if (!s_driverHello) {
-        s_driverHello = true;
-        DPRINTF("mailbox: driver hello, version %u\n", (unsigned)data);
-      }
+      // The driver just came up (first load, reload, or port
+      // re-activation). Resync: anything published before it existed
+      // was never going to be acked, and leaving that publication
+      // outstanding would block every future publish -- the RP starts
+      // publishing LAN broadcast traffic as soon as WiFi is up, long
+      // before the user reaches STinG, so without this reset RX is dead
+      // on arrival. Queued pre-driver frames are stale, so drop them
+      // and start clean. s_rxSeq stays monotonic: the driver latches
+      // the current value at set_state, so the next publish always
+      // differs from it.
+      s_rxOutstanding = false;
+      s_rxq.tail = s_rxq.head;
+      s_txActive = false;
+      s_txLen = 0;
+      s_txFill = 0;
+      s_driverHello = true;
+      DPRINTF("mailbox: driver hello, version %u (rx resync at seq %u)\n",
+              (unsigned)data, (unsigned)s_rxSeq);
       break;
     case MBC_DRIVER_BYE:
       DPRINTF("mailbox: driver bye\n");
       s_driverHello = false;
+      s_rxOutstanding = false;  // no consumer left; do not block publishes
+      s_rxq.tail = s_rxq.head;
       break;
     default:
       break;  // MBC_NOP + unassigned channels: ignore
@@ -261,9 +296,7 @@ void mailbox_init(void) {
 
 void mailbox_poll(void) {
   commemul_poll(mailbox_on_rom3_sample);
-  if (!s_rxOutstanding) {
-    mailbox_publish_next();
-  }
+  mailbox_publish_next();  // no-ops unless the window is free
   // Periodic stats for hardware visibility.
   static uint32_t s_lastStats = 0;
   uint32_t now = time_us_32();

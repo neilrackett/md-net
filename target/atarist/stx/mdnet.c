@@ -46,6 +46,20 @@ typedef struct baspag {
 #include "transprt.h"
 #include "port.h"
 
+/* Compile-time ABI checks. The STinG SDK headers were written for
+   Pure-C (16-bit int); we build with -mshort so the layouts must match
+   exactly. The PORT offset is checked against the reference EtherNEC
+   driver's hand-written assembler constant (NESTNG.S: ptReceive EQU
+   $24), and the IP_DGRAM size against its sgIp_DgramLen (48). A silent
+   mismatch here would corrupt STinG's own structures. */
+#define MDNET_ASSERT(name, cond) typedef char mdnet_chk_##name[(cond) ? 1 : -1]
+MDNET_ASSERT(int16, sizeof(int16) == 2);
+MDNET_ASSERT(int32, sizeof(int32) == 4);
+MDNET_ASSERT(ip_hdr, sizeof(IP_HDR) == 20);
+MDNET_ASSERT(ip_dgram, sizeof(IP_DGRAM) == 48);
+MDNET_ASSERT(port_receive, __builtin_offsetof(PORT, receive) == 0x24);
+MDNET_ASSERT(port_ip, __builtin_offsetof(PORT, ip_addr) == 0x0C);
+
 /* ---- GEMDOS bindings (no stdlib: raw trap #1) ---------------------- */
 
 static int32 gemdos1l(int16 op, int32 a) {
@@ -105,6 +119,7 @@ static int32 gemdos_ptermres(int32 keep, int16 rc) {
 #define MBC_TX_DATA 0x04
 #define MBC_TX_COMMIT 0x05
 #define MBC_DRIVER_HELLO 0x06
+#define MBC_DRIVER_BYE 0x07
 
 #define DRIVER_VERSION_BYTE 1
 
@@ -141,6 +156,9 @@ typedef struct arp_pkt {
   uint8 dest_ether[6];
   uint32 dest_ip;
 } ARP;
+
+MDNET_ASSERT(eth_hdr, sizeof(ETH_HDR) == 14);
+MDNET_ASSERT(arp_pkt, sizeof(ARP) == 28);
 
 #define ARP_HARD_ETHER 1
 #define ARP_OP_REQ 1
@@ -311,7 +329,6 @@ static void deliver_ip_dgram(const volatile uint8 *frame, int16 flen) {
   int16 hd_len, opt_len, data_len;
   uint16 ip_total;
   uint32 ip_dest;
-  int16 i;
 
   if (flen < (int16)(sizeof(ETH_HDR) + sizeof(IP_HDR))) return;
 
@@ -326,11 +343,17 @@ static void deliver_ip_dgram(const volatile uint8 *frame, int16 flen) {
   ip_dest = ((uint32)ip[16] << 24) | ((uint32)ip[17] << 16) |
             ((uint32)ip[18] << 8) | (uint32)ip[19];
 
-  /* Only our unicast + broadcast (like the EtherNEC driver's type peek). */
-  if (ip_dest != my_port.ip_addr && ip_dest != 0xffffffffUL &&
-      (my_port.sub_mask == 0 ||
-       ip_dest != (my_port.ip_addr | ~my_port.sub_mask)))
-    return;
+  /* Deliver our unicast + broadcasts. The reference EtherNEC driver
+     filters nothing here (its NE2000 filtered by MAC), but our bridge
+     hands over everything the shared MAC sees, so drop other hosts'
+     unicast traffic rather than KRmalloc it. If the port IP is not
+     configured yet, accept everything -- a wrong filter here would
+     silently black-hole all traffic, which is far worse than noise. */
+  if (my_port.ip_addr != 0 && my_port.ip_addr != 0xffffffffUL) {
+    if (ip_dest != my_port.ip_addr && ip_dest != 0xffffffffUL &&
+        ip_dest != (my_port.ip_addr | ~my_port.sub_mask))
+      return;
+  }
 
   dgram = KRmalloc(sizeof(IP_DGRAM));
   if (dgram == NULL) return;
@@ -370,7 +393,6 @@ static void deliver_ip_dgram(const volatile uint8 *frame, int16 flen) {
     walk->next = dgram;
   }
   my_port.stat_rcv_data += flen;
-  (void)i;
 }
 
 static void mb_rx_service(void) {
@@ -523,6 +545,7 @@ static int16 cdecl my_set_state(PORT *port, int16 state) {
   } else {
     doTxArp = FALSE;
     waitArp = 0;
+    mb_cmd(MBC_DRIVER_BYE, 0);
     {
       IP_DGRAM *walk, *next;
       for (walk = my_port.send; walk; walk = next) {

@@ -43,22 +43,53 @@ static void test_tx_roundtrip(void) {
   printf("PASS: TX stream -> assembled frame + ack\n");
 }
 
+// The publish/ack handshake, exactly as the driver drives it. Also
+// pins the resync behaviour: without it, a frame published before the
+// driver ever loaded (which happens on every real boot -- the RP starts
+// bridging LAN broadcasts as soon as WiFi is up) is never acked and
+// blocks every later publish, killing RX for the whole session.
 static void test_rx_publish_ack(void) {
   uint8_t f1[60], f2[60];
+  uint16_t seq1, seq2;
+  int i;
+
   memset(f1, 0xAA, sizeof(f1));
   memset(f2, 0xBB, sizeof(f2));
   f1[0] = 0x01; f1[59] = 0x99;
+  f2[0] = 0x02;
 
   assert(mailbox_rx_enqueue(f1, sizeof(f1)));
   assert(mailbox_rx_enqueue(f2, sizeof(f2)));
 
-  // Nothing published yet (poll not run in host test): publish manually
-  // via the poll-equivalent path is internal; instead we drive the
-  // publish through the internal API by simulating the sequence: the
-  // firmware calls mailbox_poll(), which is pico-only. For the host we
-  // verify enqueue bounds + the ROM3 decode already covered; the
-  // publish path is exercised on hardware via the seq/len fields.
-  printf("PASS: RX enqueue bounds\n");
+  mailbox_publish_next();
+  seq1 = m68k_r16(MB_RX_SEQ_OFF);
+  assert(seq1 != 0 && "a frame was published");
+  assert(m68k_r16(MB_RX_LEN_OFF) == sizeof(f1) && "length published");
+  for (i = 0; i < (int)sizeof(f1); i++) {
+    assert(m68k_r8(MB_RX_BUF_OFF + i) == f1[i] && "frame readable by m68k");
+  }
+
+  // Unacked: the window must not be overwritten while the ST may read it.
+  mailbox_publish_next();
+  assert(m68k_r16(MB_RX_SEQ_OFF) == seq1 && "no republish before ack");
+  assert(m68k_r8(MB_RX_BUF_OFF) == f1[0] && "buffer untouched before ack");
+
+  // Ack releases the window; the next frame appears.
+  mailbox_on_rom3_sample(rom3(MBC_RX_ACK, (uint8_t)seq1));
+  mailbox_publish_next();
+  seq2 = m68k_r16(MB_RX_SEQ_OFF);
+  assert(seq2 != seq1 && "sequence advanced after ack");
+  assert(m68k_r8(MB_RX_BUF_OFF) == f2[0] && "second frame published");
+
+  // Driver hello must resync a publication stranded before it loaded.
+  assert(mailbox_rx_enqueue(f1, sizeof(f1)));
+  mailbox_publish_next();  // blocked: seq2 never acked
+  assert(m68k_r16(MB_RX_SEQ_OFF) == seq2 && "still blocked without ack");
+  mailbox_on_rom3_sample(rom3(MBC_DRIVER_HELLO, 1));
+  assert(mailbox_rx_enqueue(f1, sizeof(f1)));
+  mailbox_publish_next();
+  assert(m68k_r16(MB_RX_SEQ_OFF) != seq2 && "hello resyncs the handshake");
+  printf("PASS: RX publish/ack handshake + driver-hello resync\n");
 }
 
 static void test_decode_matches_driver_encoding(void) {

@@ -46,6 +46,24 @@ Publication order (RP side): frame bytes → `MB_RX_LEN` → memory barrier
 copies the frame with an ordinary ascending loop (every address read
 once — romemul-perfect), then ACKs. The RP publishes the next frame
 only after the ACK, so the buffer is never rewritten under a reader.
+That invariant is enforced inside `mailbox_publish_next()` itself, not
+by its caller — it is the one property the whole timing-free design
+rests on.
+
+Two details that are load-bearing rather than incidental:
+
+- **16-bit fields are published with a single store.** A little-endian
+  16-bit write at an even RP offset is presented to the m68k as the
+  correct big-endian word, atomically. Two byte writes would tear: a
+  sequence crossing 255→256 could be read as 511, whose low byte then
+  ACKs a sequence the RP never published — wedging the handshake for
+  good.
+- **`MBC_DRIVER_HELLO` resyncs the RX handshake.** The RP starts
+  bridging LAN broadcasts the moment WiFi is up, long before the user
+  reaches STinG, so a frame is normally published (and left unacked)
+  before the driver exists. Without the reset on hello, that stranded
+  publication blocks every later one and RX is dead for the entire
+  session. `MBC_DRIVER_BYE` does the same on the way out.
 
 ## ROM3 command encoding (ST writes, RP captures via commemul)
 

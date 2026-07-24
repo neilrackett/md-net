@@ -61,7 +61,10 @@ void mailbox_poll(void);
 // ROM3 sample handler (exposed for the host-side unit test).
 void mailbox_on_rom3_sample(uint16_t sample);
 
-// Host-test seams: the RX publish queue.
+// Host-test seams: the RX publish queue and the publish step.
 bool mailbox_rx_enqueue(const uint8_t *frame, uint16_t len);
+#ifdef MAILBOX_HOST_TEST
+void mailbox_publish_next(void);
+#endif
 
 #endif  // MAILBOX_H

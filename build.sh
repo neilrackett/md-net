@@ -59,6 +59,7 @@ if [ ! -f target/atarist/stx/MDNET.STX ]; then
     exit 1
 fi
 cp target/atarist/stx/MDNET.STX dist/MDNET.STX
+cp target/atarist/stx/README.TXT dist/README.TXT
 echo "Done building MDNET.STX"
 
 # Build the rp project in the RP architecture
