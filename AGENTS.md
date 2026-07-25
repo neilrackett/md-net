@@ -243,6 +243,15 @@ write macro composes `(reg<<8|data)` then doubles it.
   banner version** → capture UART from power-on → `PING 192.168.1.1`
   from the ST (never the ST's own address — STinG answers that
   internally).
+- **Every build is reviewed by a different model than wrote it** before
+  it goes to hardware (Opus writes → Fable reviews, and vice versa; use
+  the Agent tool's model override). Self-review repeatedly missed
+  defects that cost hardware sessions; the first cross-model pass found
+  three real bugs, and the second found a `Supexec` omission that would
+  have bombed the ST before the driver installed. Hardware cycles are
+  the scarce resource, not tokens. Ask the reviewer to verify each
+  finding against the code and the reference sources, and to label
+  findings CONFIRMED or SPECULATIVE.
 - When deduction and measurement deadlock, run a cheap intervention
   experiment (e.g. the padding experiment) — its side effects often
   reveal the real mechanism.
