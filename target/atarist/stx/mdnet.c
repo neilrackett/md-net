@@ -43,8 +43,8 @@ typedef struct baspag {
 
 /* The STinG SDK headers define int8..uint32 themselves (Pure-C sizes;
    we compile with -mshort so int is 16-bit and the layouts match). */
-#include "transprt.h"
-#include "port.h"
+#include "TRANSPRT.H"
+#include "PORT.H"
 
 /* Compile-time ABI checks. The STinG SDK headers were written for
    Pure-C (16-bit int); we build with -mshort so the layouts must match
@@ -89,6 +89,26 @@ static int32 gemdos_ptermres(int32 keep, int16 rc) {
   return ret;
 }
 
+/* XBIOS Supexec (38): run fn in supervisor mode. Required for anything
+   touching the system-variable page ($0-$7FF), which is bus-error
+   protected in user mode -- STinG Pexec's this module, so driver_main
+   can run unprivileged. The reference driver wraps its cookie-jar walk
+   the same way (ENESTNG.C: Supexec(get_sting_cookie)). Cart-space
+   access needs no such wrapper: the reference calls its bus routines
+   directly from my_send/my_receive. */
+static int32 xbios_supexec(long (*fn)(void)) {
+  register int32 ret __asm__("d0");
+  __asm__ volatile(
+      "move.l %1,-(%%sp)\n\t"
+      "move.w #38,-(%%sp)\n\t"
+      "trap   #14\n\t"
+      "addq.l #6,%%sp"
+      : "=r"(ret)
+      : "r"(fn)
+      : "d1", "d2", "a0", "a1", "a2", "cc", "memory");
+  return ret;
+}
+
 #define Cconws(s) gemdos1l(9, (int32)(s))
 #define Pterm(rc) gemdos1l(76, (int32)(rc))
 #define Ptermres(keep, rc) gemdos_ptermres((keep), (rc))
@@ -112,6 +132,7 @@ static int32 gemdos_ptermres(int32 keep, int16 rc) {
 #define MB_RX_BUF_OFF 0x5000UL
 
 #define MB_PROTO_MAGIC 0x4D444E42UL /* 'MDNB' */
+#define MB_PROTO_VERSION 1
 
 #define MBC_RX_ACK 0x01
 #define MBC_TX_START 0x02
@@ -334,11 +355,14 @@ static void deliver_ip_dgram(const volatile uint8 *frame, int16 flen) {
 
   hd_len = (int16)((ip[0] & 0x0F) * 4);
   if (hd_len < (int16)sizeof(IP_HDR)) return;
+  /* Compare unsigned throughout: a frame claiming an IP length of
+     0x8000+ would go negative as int16, pass a signed bounds check and
+     then underflow into a ~32 KB allocation and copy. */
   ip_total = (uint16)((ip[2] << 8) | ip[3]);
-  if ((int16)ip_total > flen - (int16)sizeof(ETH_HDR)) return;
+  if (ip_total > (uint16)(flen - (int16)sizeof(ETH_HDR))) return;
+  if (ip_total < (uint16)hd_len) return;
   opt_len = hd_len - (int16)sizeof(IP_HDR);
-  data_len = (int16)ip_total - hd_len;
-  if (data_len < 0) return;
+  data_len = (int16)(ip_total - (uint16)hd_len);
 
   ip_dest = ((uint32)ip[16] << 24) | ((uint32)ip[17] << 16) |
             ((uint32)ip[18] << 8) | (uint32)ip[19];
@@ -540,8 +564,16 @@ static int16 cdecl my_set_state(PORT *port, int16 state) {
     if (mb_r32(MB_CFG_IP_OFF) != 0) my_port.ip_addr = mb_r32(MB_CFG_IP_OFF);
     if (my_port.sub_mask == 0xffffffffUL && mb_r32(MB_CFG_MASK_OFF) != 0)
       my_port.sub_mask = mb_r32(MB_CFG_MASK_OFF);
-    last_rx_seq = mb_r16(MB_RX_SEQ_OFF); /* skip anything stale */
+    /* Resync the RX handshake, then latch. Order matters: HELLO first
+       frees any publication stranded before we existed, and only THEN
+       do we latch what is in the window, acking it so the RP is never
+       left waiting on a frame we skipped. Latching before HELLO left a
+       window where the RP could re-publish over a frame we had already
+       started copying; latching after HELLO without acking could strand
+       a publication instead. This ordering does neither. */
     mb_cmd(MBC_DRIVER_HELLO, DRIVER_VERSION_BYTE);
+    last_rx_seq = mb_r16(MB_RX_SEQ_OFF);
+    mb_cmd(MBC_RX_ACK, (uint16)(last_rx_seq & 0xFF));
   } else {
     doTxArp = FALSE;
     waitArp = 0;
@@ -617,6 +649,8 @@ void cdecl driver_main(BASPAG *bp) {
   static char fault[] =
       "MDNET.STX: STinG extension module. To be started by STinG!\r\n";
   static char nohw[] = "MDNET.STX: MD/Net cartridge not found.\r\n";
+  static char badver[] =
+      "MDNET.STX: driver/firmware version mismatch. Update both.\r\n";
   DRV_LIST *sting_drivers;
   long PgmSize = (long)bp->p_bbase + bp->p_blen - (long)bp;
 
@@ -627,13 +661,26 @@ void cdecl driver_main(BASPAG *bp) {
     goto errExit;
   }
 
-  /* Probe: the MD/Net firmware publishes its magic in the ROM4 window. */
+  /* Probe: the MD/Net firmware publishes its magic in the ROM4 window.
+     The version must match too -- a driver and firmware that disagree
+     about the mailbox layout would fail in far more confusing ways. */
   if (mb_r32(MB_PROTO_MAGIC_OFF) != MB_PROTO_MAGIC) {
     Cconws(nohw);
     goto errExit;
   }
+  if (mb_r16(MB_PROTO_VER_OFF) != MB_PROTO_VERSION) {
+    Cconws(badver);
+    goto errExit;
+  }
 
-  if ((sting_drivers = (DRV_LIST *)get_sting_cookie()) == NULL) goto errExit;
+  {
+    int16 i;  /* publish the MAC now: STNGPORT.CPX may query it before
+                 the port is ever activated */
+    for (i = 0; i < 6; i++) my_mac[i] = mb_r8(MB_MAC_OFF + i);
+  }
+
+  sting_drivers = (DRV_LIST *)xbios_supexec(get_sting_cookie);
+  if (sting_drivers == NULL) goto errExit;
   {
     const char *m = MAGIC;
     const char *g = sting_drivers->magic;

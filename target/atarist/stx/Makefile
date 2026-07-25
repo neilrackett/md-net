@@ -19,7 +19,7 @@ MDNET.STX: $(OBJS)
 entry.o: entry.s
 	$(CC) -m68000 -c -o $@ $<
 
-mdnet.o: mdnet.c transprt.h port.h
+mdnet.o: mdnet.c TRANSPRT.H PORT.H
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 clean:
