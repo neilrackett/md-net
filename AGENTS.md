@@ -34,9 +34,18 @@ the WiFi stack (`network.c`, lwIP) restored from
 
 Milestones: **v0.1.0** — WiFi bootstrap, `Cconws` boot banner
 ("MD/Net connected: <IP>"), return to GEM (done, hardware-validated).
-**v0.2.0** — working ST networking (ping/FTP on hardware). The minor
-version bumps per milestone; **every `make debug` auto-bumps the patch**
-so each flashed image is identifiable.
+**v0.2.0** — working ST networking: ping in both directions at 0% loss
+(done, hardware-validated 2026-07-27, tagged). **v0.3.0** — the driver
+installed from the cartridge and the ST configured without the user
+touching anything (built, not yet hardware-validated).
+
+The minor version bumps per milestone; **every `make debug` auto-bumps
+the patch** so each flashed image is identifiable. **Tagging a
+milestone does not bump the minor — do it as a separate step**, editing
+all four `version.txt` files (root, `target/`, `target/atarist/`,
+`rp/`). Miss it and development builds keep climbing the old series, so
+the banner stops saying which milestone a build belongs to (v0.2.0 was
+tagged while builds ran on to v0.1.69).
 
 ## ⚠️ Branch strategy: `netusbee` (paused) vs `stx` (active)
 
