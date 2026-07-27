@@ -36,8 +36,10 @@ Milestones: **v0.1.0** — WiFi bootstrap, `Cconws` boot banner
 ("MD/Net connected: <IP>"), return to GEM (done, hardware-validated).
 **v0.2.0** — working ST networking: ping in both directions at 0% loss
 (done, hardware-validated 2026-07-27, tagged). **v0.3.0** — the driver
-installed from the cartridge and the ST configured without the user
-touching anything (built, not yet hardware-validated).
+installed from the cartridge and the ST configured for the user
+(done, hardware-validated 2026-07-27: INSTALL.TOS writes the driver,
+STinG Port Setup opens pre-filled with an ARP-probed address, ping 0%
+loss both ways; the user still ticks Active once).
 
 The minor version bumps per milestone; **every `make debug` auto-bumps
 the patch** so each flashed image is identifiable. **Tagging a
@@ -80,15 +82,16 @@ implements the same port API (`my_send` / `my_receive` /
 `my_set_state` / `my_cntrl`).
 
 Measured characteristics, so nobody re-derives them: round-trip time
-is ~100-170 ms and throughput is **at least ~20 frames/s each way**.
-The RTT shows a sawtooth whose snap-back is ~47 ms, which is the
-period at which STinG services the driver -- the design hands over one
-frame per service, so that cadence bounds both latency and rate. The
-true ceiling is **not** established: an ICMP flood test could not push
-past ~20/s, but the RP received only ~20/s as well, so upstream ICMP
-rate-limiting is an unresolved confound. Measure with TCP (a real
-transfer) before concluding anything, and before building the obvious
-fix (publishing a ring of frames rather than one at a time).
+is ~60-210 ms (mean ~105 ms) and throughput is **~20 frames/s each
+way**. The RTT sawtooth snaps back by ~50 ms, which is how often STinG
+services the driver; combined with the design handing over exactly one
+frame per service, that fixes the ceiling at 20 frames/s by
+arithmetic -- confirmed over 223 packets with `q=0` and no drops. The
+fix is ours, not STinG's, and is in two halves: publish a ring of RX
+frames so `my_receive`'s existing budget loop can actually drain
+several per visit, and send more than one datagram per `my_send` (the
+one-per-call limit is inherited from the EtherNEC driver, where it was
+an NE2000 buffer constraint that does not apply to us).
 
 ## Build
 
