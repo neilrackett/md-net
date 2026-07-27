@@ -22,6 +22,15 @@ WHAT YOU NEED
 
 INSTALLING
 
+Run INSTALL.PRG. It copies MDNET.STX and this file into your STING
+folder, deactivates any EtherNEC driver it finds (ENEC.STX becomes
+ENEC.ST_), and tells you what it did.
+
+The files come from the cartridge itself, so the driver you get always
+matches the firmware you are running.
+
+To install by hand instead:
+
 1. Copy MDNET.STX into your STING folder, usually C:\STING.
 2. Deactivate any other Ethernet drivers, either by removing the X
    in the control panel, or renaming ENEC.STX and similar files.

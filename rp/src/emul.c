@@ -36,6 +36,7 @@
 #include "mailbox.h"
 #include "memfunc.h"
 #include "network.h"
+#include "payload.h"
 #include "pico/stdlib.h"
 #include "reset.h"
 #include "romemul.h"
@@ -154,6 +155,11 @@ void emul_start() {
   // mailbox fields live outside it, so even a warm reset still boots
   // with the banner.
   mailbox_init();
+
+  // Publish the installer's payload (the driver + its notes) into the
+  // ROM4 window. Cheap, one-off, and it means INSTALL.PRG always writes
+  // the driver matching this firmware.
+  payload_publish();
 
   // Idle loop: drain the ROM3 command ring into the mailbox, publish
   // queued RX frames, service lwIP/cyw43 and the SELECT button. Nothing

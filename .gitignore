@@ -72,3 +72,7 @@ target/atarist/src/version.inc
 # Built STinG driver: a build artifact, shipped via dist/
 target/atarist/stx/MDNET.STX
 target/atarist/stx/*.o
+
+# Generated cartridge payload (see tools/mkpayload.py)
+rp/src/include/mdnet_payload.h
+target/atarist/stx/INSTALL.PRG
