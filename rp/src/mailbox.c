@@ -24,6 +24,7 @@
 #include <stdio.h>
 #define DPRINTF(...) printf(__VA_ARGS__)
 #else
+#include "autoconf.h"
 #include "cart_shared.h"
 #include "commemul.h"
 #include "debug.h"
@@ -263,6 +264,7 @@ static err_t mailbox_netif_input(struct pbuf *p, struct netif *inp) {
   if (len >= 14u && len <= MB_FRAME_MAX) {
     static uint8_t rxbuf[MB_FRAME_MAX];
     pbuf_copy_partial(p, rxbuf, len, 0);
+    autoconf_observe(rxbuf, len);  // watch for defenders of our candidate
     mailbox_rx_enqueue(rxbuf, len);
   }
   if (s_orig_input != NULL) {
@@ -279,6 +281,17 @@ static void install_rx_tap(void) {
     n->input = mailbox_netif_input;
     DPRINTF("mailbox: RX tap installed on STA netif\n");
   }
+}
+
+void mailbox_publish_config(uint32_t ip, uint32_t mask, uint32_t gw,
+                            uint32_t dns) {
+  static uint16_t s_cfgSeq = 1;
+  mb_w32(MB_CFG_IP_OFF, ip);
+  mb_w32(MB_CFG_MASK_OFF, mask);
+  mb_w32(MB_CFG_GW_OFF, gw);
+  mb_w32(MB_CFG_DNS_OFF, dns);
+  __sync_synchronize();  // config complete before the sequence advertises it
+  mb_w16(MB_CFG_SEQ_OFF, ++s_cfgSeq);
 }
 
 void mailbox_init(void) {

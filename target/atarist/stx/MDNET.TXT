@@ -38,32 +38,16 @@ To install by hand instead:
 
 CONFIGURING
 
-1. Open the STinG control panel (STNGPORT.CPX).
-2. Select the port named "WiFi".
-3. Set the IP address you'd like your ST to use, for example
-   192.168.1.242, and set the subnet mask to 255.255.255.0.
-4. Make sure the port is set to Active, then save.
-5. Edit ROUTE.TAB in your STING folder so it refers to the WiFi port.
-   The entries are separated by TAB characters (replace 192.168.1.1 
-   with your actual router address):
+Nothing to do. MD/Net picks an address for your ST from your own
+network, checks nothing else is using it, and sets up the routing.
 
-   192.168.1.0    255.255.255.0    WiFi    0.0.0.0
-   0.0.0.0        0.0.0.0          WiFi    192.168.1.1
+To choose the address yourself instead, open the STinG control panel
+(STNGPORT.CPX), select the port named "WiFi", set the address and
+subnet mask you want, and make sure the port is Active. An address
+you set by hand always wins.
 
-6. For name lookups, set NAMESERVER in DEFAULT.CFG to your
-   router's address.
-7. Reboot your ST.
-
-Similar to NetUSBee, but with "WiFi" selected instead of "EtherNet": 
-https://hardware.atari.org/manuals/netsting.htm
-
-
-TESTING
-
-Run STING/TOOLS/PING.PRG and ping your router.
-
-
-FAQS
+If you want name lookups (web browsing, etc), set NAMESERVER in
+DEFAULT.CFG to your router's address.
 
 Q. Why don't I see "MD/Net connected" message at boot?
 A. Check that the MD/Net firmware is installed and your SidecarTridge

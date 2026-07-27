@@ -118,10 +118,11 @@ re-pinned by the build).
 - Never grep build logs through filters that exclude `pico-sdk` paths
   when hunting errors — compile errors triggered *inside* SDK headers
   carry SDK paths and vanish from the filtered view.
-- Host-side mailbox tests: `cc -DMAILBOX_HOST_TEST -Irp/src/include -o
-  /tmp/t tools/mailbox_test.c rp/src/mailbox.c && /tmp/t` — run them
-  after any `mailbox.c` change. (The netusbee branch keeps the NE2000
-  model tests.)
+- Host-side tests: `cc -DMAILBOX_HOST_TEST -DAUTOCONF_HOST_TEST
+  -Irp/src/include -o /tmp/t tools/mailbox_test.c rp/src/mailbox.c
+  rp/src/autoconf.c && /tmp/t` — run after any `mailbox.c` or
+  `autoconf.c` change. Both guard macros are needed: each file uses its
+  own. (The netusbee branch keeps the NE2000 model tests.)
 
 ## Architecture
 

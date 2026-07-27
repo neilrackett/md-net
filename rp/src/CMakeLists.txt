@@ -101,6 +101,7 @@ target_sources(${PROJECT_NAME} PRIVATE
         emul.c
         gconfig.c
         hw_config.c
+        autoconf.c
         mailbox.c
         payload.c
         network.c

@@ -66,6 +66,12 @@ void mailbox_poll(void);
 // ROM3 sample handler (exposed for the host-side unit test).
 void mailbox_on_rom3_sample(uint16_t sample);
 
+// Publish the network configuration the ST should adopt (host byte
+// order). A non-zero IP tells the driver to configure itself; the
+// sequence number is bumped so a driver already running can notice.
+void mailbox_publish_config(uint32_t ip, uint32_t mask, uint32_t gw,
+                            uint32_t dns);
+
 // Host-test seams: the RX publish queue and the publish step.
 bool mailbox_rx_enqueue(const uint8_t *frame, uint16_t len);
 #ifdef MAILBOX_HOST_TEST

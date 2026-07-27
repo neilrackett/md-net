@@ -18,6 +18,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "autoconf.h"
 #include "mailbox.h"
 
 extern uint8_t mailbox_test_rom[0x10000];
@@ -110,10 +111,42 @@ static void test_decode_matches_driver_encoding(void) {
   printf("PASS: ROM3 channel/data encode-decode round trip\n");
 }
 
+// Address selection for the ST: it must never offer the Pico's own
+// address, the network address or the broadcast address, and it should
+// start just above the Pico so a lease of .241 offers the ST .242.
+static void test_autoconf_candidates(void) {
+  uint32_t ip = 0xC0A801F1u;   // 192.168.1.241
+  uint32_t mask = 0xFFFFFF00u; // /24
+  uint32_t seen[8];
+  int i, j;
+
+  for (i = 0; i < 8; i++) {
+    seen[i] = autoconf_candidate(ip, mask, (uint8_t)i);
+    assert(seen[i] != 0 && "a /24 has plenty of room");
+    assert((seen[i] & mask) == (ip & mask) && "stays in our subnet");
+    assert(seen[i] != ip && "never our own address");
+    assert((seen[i] & ~mask) != 0 && "never the network address");
+    assert((seen[i] & ~mask) != ~mask && "never the broadcast address");
+    for (j = 0; j < i; j++) assert(seen[j] != seen[i] && "no repeats");
+  }
+  assert(seen[0] == 0xC0A801F2u && ".241 offers the ST .242");
+  assert(seen[1] == 0xC0A801F3u && "then .243");
+
+  // Wrapping past .254 must skip .255 and .0 and continue at .1.
+  assert(autoconf_candidate(0xC0A801FDu, mask, 0) == 0xC0A801FEu);
+  assert(autoconf_candidate(0xC0A801FDu, mask, 1) == 0xC0A80101u);
+
+  // A subnet with no room for a second host must refuse.
+  assert(autoconf_candidate(ip, 0xFFFFFFFFu, 0) == 0 && "/32 has no room");
+  assert(autoconf_candidate(ip, 0xFFFFFFFEu, 0) == 0 && "/31 has no room");
+  printf("PASS: ST address selection (subnet, skips, wrap, exhaustion)\n");
+}
+
 int main(void) {
   test_decode_matches_driver_encoding();
   test_tx_roundtrip();
   test_rx_publish_ack();
+  test_autoconf_candidates();
   printf("all mailbox tests pass\n");
   return 0;
 }

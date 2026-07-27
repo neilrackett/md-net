@@ -28,6 +28,7 @@
 #include <stdlib.h>
 
 #include "aconfig.h"
+#include "autoconf.h"
 #include "cart_shared.h"
 #include "commemul.h"
 #include "debug.h"
@@ -161,6 +162,10 @@ void emul_start() {
   // the driver matching this firmware.
   payload_publish();
 
+  // Choose an address for the ST out of our own subnet, so a stock
+  // machine needs no manual IP configuration.
+  autoconf_start();
+
   // Idle loop: drain the ROM3 command ring into the mailbox, publish
   // queued RX frames, service lwIP/cyw43 and the SELECT button. Nothing
   // here is timing-critical: the DMA ring absorbs bus bursts and ROM4
@@ -168,6 +173,7 @@ void emul_start() {
   DPRINTF("Entering main loop\n");
   while (true) {
     mailbox_poll();
+    autoconf_poll();
     network_safePoll();
     cyw43_arch_wait_for_work_until(make_timeout_time_ms(1));
     select_checkPushReset();
