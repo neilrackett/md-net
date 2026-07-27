@@ -490,6 +490,43 @@ static void install_routes(uint32 gateway) {
   }
 }
 
+/* Take the address the cartridge chose for us.
+
+   Called twice: once at install, so STNGPORT.CPX shows the address
+   straight away on a machine that has never been configured, and again
+   at activation, by which point STinG has applied any saved settings
+   and the user's own address (if there is one) must win.
+
+   Routes are only installed at activation. STinG rebuilds its whole
+   routing table when it loads ROUTE.TAB, so anything added before that
+   would simply be discarded. */
+static void adopt_config(int16 with_routes) {
+  uint32 cfg_ip, cfg_mask, cfg_gw;
+  uint16 seq, guard = 0;
+
+  /* Read seq-stably: the cartridge bumps MB_CFG_SEQ after writing the
+     block, so checking it either side catches a publish that lands
+     mid-read. */
+  do {
+    seq = mb_r16(MB_CFG_SEQ_OFF);
+    cfg_ip = mb_r32(MB_CFG_IP_OFF);
+    cfg_mask = mb_r32(MB_CFG_MASK_OFF);
+    cfg_gw = mb_r32(MB_CFG_GW_OFF);
+  } while (seq != mb_r16(MB_CFG_SEQ_OFF) && ++guard < 4);
+
+  /* An unconfigured port is 0xffffffff (see the initialiser above),
+     which is also what STinG stores for "not set". */
+  if ((my_port.ip_addr == 0 || my_port.ip_addr == 0xffffffffUL) &&
+      cfg_ip != 0) {
+    my_port.ip_addr = cfg_ip;
+    if (cfg_mask != 0) my_port.sub_mask = cfg_mask;
+  } else if (my_port.sub_mask == 0xffffffffUL && cfg_mask != 0) {
+    my_port.sub_mask = cfg_mask;
+  }
+
+  if (with_routes) install_routes(cfg_gw);
+}
+
 /* ---- STinG port driver entry points -------------------------------- */
 
 static void cdecl my_send(PORT *port) {
@@ -605,32 +642,7 @@ static int16 cdecl my_set_state(PORT *port, int16 state) {
     arpEthPckt.arp.protocol_space = TYPE_IP;
     arpEthPckt.arp.hardware_len = 6;
     arpEthPckt.arp.protocol_len = 4;
-    /* Read the config block seq-stably: the cartridge bumps MB_CFG_SEQ
-       after writing it, so reading the sequence either side of the
-       fields catches a publish that lands mid-read. */
-    {
-      uint32 cfg_ip, cfg_mask, cfg_gw;
-      uint16 seq, guard = 0;
-      do {
-        seq = mb_r16(MB_CFG_SEQ_OFF);
-        cfg_ip = mb_r32(MB_CFG_IP_OFF);
-        cfg_mask = mb_r32(MB_CFG_MASK_OFF);
-        cfg_gw = mb_r32(MB_CFG_GW_OFF);
-      } while (seq != mb_r16(MB_CFG_SEQ_OFF) && ++guard < 4);
-
-      /* Adopt the address the cartridge chose, but only if the user has
-         not set one: an explicit STNGPORT.CPX address always wins. An
-         unconfigured port is 0xffffffff (see the initialiser above),
-         which is also what STinG stores for "not set". */
-      if ((my_port.ip_addr == 0 || my_port.ip_addr == 0xffffffffUL) &&
-          cfg_ip != 0) {
-        my_port.ip_addr = cfg_ip;
-        if (cfg_mask != 0) my_port.sub_mask = cfg_mask;
-      } else if (my_port.sub_mask == 0xffffffffUL && cfg_mask != 0) {
-        my_port.sub_mask = cfg_mask;
-      }
-      install_routes(cfg_gw);
-    }
+    adopt_config(TRUE);
     /* Resync the RX handshake, then latch. Order matters: HELLO first
        frees any publication stranded before we existed, and only THEN
        do we latch what is in the window, acking it so the RP is never
@@ -760,6 +772,10 @@ void cdecl driver_main(BASPAG *bp) {
 
   if (tpl != NULL && stx != NULL) {
     install(bp);
+    /* Pre-fill the port so STNGPORT.CPX opens with an address already
+       in it on a machine that has never been configured. Routes wait
+       until activation (see adopt_config). */
+    adopt_config(FALSE);
     Ptermres(PgmSize, 0);
   }
 

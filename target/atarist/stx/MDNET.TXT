@@ -22,7 +22,7 @@ WHAT YOU NEED
 
 INSTALLING
 
-Run INSTALL.PRG. It copies MDNET.STX and this file into your STING
+Run INSTALL.TOS. It copies MDNET.STX and this file into your STING
 folder, deactivates any EtherNEC driver it finds (ENEC.STX becomes
 ENEC.ST_), and tells you what it did.
 

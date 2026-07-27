@@ -50,23 +50,23 @@ echo "Done building target project"
 # Build the STinG driver (MDNET.STX) with the m68k-atari-mint GCC cross
 # toolchain from the same atarist-toolkit Docker image. Ships in dist/
 # next to the UF2 -- the user copies it to the ST's STING folder.
-echo "Building MDNET.STX + INSTALL.PRG (ST driver and installer)"
+echo "Building MDNET.STX + INSTALL.TOS (ST driver and installer)"
 MDNET_VERSION=$(cat "$SCRIPT_DIR/version.txt" 2>/dev/null || echo v0.0.0)
 docker run --rm -v "$SCRIPT_DIR/target/atarist/stx:/work" -w /work \
     --entrypoint sh "${STCMD_IMAGE:-neilrackett/atarist-toolkit-docker-arm64:1.2.1}" \
     -c "make clean >/dev/null && make MDNET_VERSION=$MDNET_VERSION"
-for f in MDNET.STX INSTALL.PRG; do
+for f in MDNET.STX INSTALL.TOS; do
     if [ ! -f "target/atarist/stx/$f" ]; then
         echo "ERROR: $f not produced. Aborting."
         exit 1
     fi
 done
 cp target/atarist/stx/MDNET.STX  dist/MDNET.STX
-cp target/atarist/stx/INSTALL.PRG dist/INSTALL.PRG
+cp target/atarist/stx/INSTALL.TOS dist/INSTALL.TOS
 cp target/atarist/stx/MDNET.TXT  dist/MDNET.TXT
-echo "Done building MDNET.STX + INSTALL.PRG"
+echo "Done building MDNET.STX + INSTALL.TOS"
 
-# Bake the driver and its notes into the firmware, so INSTALL.PRG can
+# Bake the driver and its notes into the firmware, so INSTALL.TOS can
 # read them out of the cartridge and the two can never version-skew.
 echo "Generating cartridge payload"
 python3 tools/mkpayload.py rp/src/include/mdnet_payload.h \

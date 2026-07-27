@@ -75,4 +75,4 @@ target/atarist/stx/*.o
 
 # Generated cartridge payload (see tools/mkpayload.py)
 rp/src/include/mdnet_payload.h
-target/atarist/stx/INSTALL.PRG
+target/atarist/stx/INSTALL.TOS

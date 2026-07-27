@@ -23,7 +23,7 @@ INST_OBJS = instentry.o install.o
 # it shipped with; build.sh passes the real value.
 MDNET_VERSION ?= v0.0.0
 
-all: MDNET.STX INSTALL.PRG
+all: MDNET.STX INSTALL.TOS
 
 MDNET.STX: $(OBJS)
 	$(CC) $(LDFLAGS) -Wl,--entry,_entry -o $@ $(OBJS)
@@ -31,7 +31,7 @@ MDNET.STX: $(OBJS)
 # The installer is a plain TOS program: default int size (it does not
 # share the STinG SDK's Pure-C ABI) and osbind.h's inline traps, so
 # -nostdlib still links.
-INSTALL.PRG: $(INST_OBJS)
+INSTALL.TOS: $(INST_OBJS)
 	$(CC) $(LDFLAGS) -Wl,--entry,_instentry -o $@ $(INST_OBJS)
 
 instentry.o: instentry.s
@@ -48,4 +48,4 @@ mdnet.o: mdnet.c TRANSPRT.H PORT.H
 	$(CC) $(CFLAGS) -c -o $@ $<
 
 clean:
-	rm -f $(OBJS) $(INST_OBJS) MDNET.STX INSTALL.PRG
+	rm -f $(OBJS) $(INST_OBJS) MDNET.STX INSTALL.TOS
