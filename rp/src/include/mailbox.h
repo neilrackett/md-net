@@ -1,3 +1,8 @@
+/*
+ * Copyright (C) 2026 Neil Rackett
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
 /**
  * File: mailbox.h
  * Description: RP side of the MD/Net cart-bus mailbox -- the RP<->ST

@@ -1,3 +1,8 @@
+/*
+ * Copyright (C) 2026 Neil Rackett
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
 /**
  * File: mailbox_test.c
  * Description: Host-side unit test for the RP mailbox module: ROM3

@@ -1,3 +1,8 @@
+#
+# Copyright (C) 2026 Neil Rackett
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+
 # Builds MDNET.STX (STinG port driver for the MD/Net mailbox) with the
 # m68k-atari-mint GCC cross toolchain from the atarist-toolkit Docker
 # image (same image the cartridge stub build uses via stcmd).

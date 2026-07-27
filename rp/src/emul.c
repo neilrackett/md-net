@@ -1,3 +1,8 @@
+/*
+ * Copyright (C) 2026 Neil Rackett
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
 /**
  * File: emul.c
  * Description: MD/Net boot path. Brings up the cartridge bus emulator,

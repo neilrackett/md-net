@@ -71,3 +71,7 @@ A. You need to copy MDNET.STX to your STING folder and restart your ST.
 Q. Why do pings time out?
 A. Check the IP address and subnet mask in the STinG control panel,
    and that ROUTE.TAB refers to "WiFi" and uses tab separators not spaces.
+
+Copyright (C) 2026 Neil Rackett
+MD/Net is free software under the GNU General Public License v3
+or later.

@@ -276,6 +276,15 @@ write macro composes `(reg<<8|data)` then doubles it.
   (pinned submodules; FatFs config override lives at `rp/src/ff/ffconf.h`).
 - Don't add features to `main.c` — start in `emul.c` / `mdnet.c`.
 - Match the existing C style (`.clang-format` / `.clang-tidy`).
+- **New or significantly modified files carry a GPL header**:
+  `Copyright (C) <year> Neil Rackett` + `SPDX-License-Identifier:
+  GPL-3.0-or-later` (see `tools/bump_version.sh` for the shell form).
+  Do **not** add it to third-party files — the STinG SDK headers and
+  the EtherNEC reference sources in `target/atarist/stx/` keep their
+  own. `target/atarist/stx/mdnet.c` is derived from Redelberger's
+  GPL'd `ENESTNG.C`; its header records the provenance and why
+  GPL-3.0-or-later applies (the upstream names no GPL version, and
+  GPLv2 §9 lets the recipient choose one).
 
 ---
 

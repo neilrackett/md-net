@@ -1,3 +1,22 @@
+/*
+ * Copyright (C) 2026 Neil Rackett
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * Derived from the EtherNEC STinG port driver ENESTNG.C,
+ * Copyright (C) 2000-2002 Dr. Thomas Redelberger, which is itself
+ * largely derived from code by Peter Rottengatter, the author of
+ * STinG. The ARP engine, the send/receive/set_state/cntrl structure
+ * and the STinG install handshake come from that driver; its NE2000
+ * hardware layer is replaced here by the MD/Net cart-bus mailbox.
+ *
+ * That upstream is distributed "under the terms of the GNU General
+ * Public License" without naming a version (its COPYING.TXT is v2), so
+ * GPLv2 section 9 -- "If the Program does not specify a version number
+ * of this License, you may choose any version ever published by the
+ * Free Software Foundation" -- permits GPLv3. This file therefore
+ * carries GPL-3.0-or-later, matching the rest of MD/Net.
+ */
+
 /**
  * File: mdnet.c
  * Description: MDNET.STX -- STinG port driver for the MD/Net cart-bus
