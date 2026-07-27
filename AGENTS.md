@@ -59,15 +59,27 @@ build-flash-test cycles guessing: the diagnosis loop hit diminishing
 returns — three "certain" root causes in a row were falsified on
 hardware before the current understanding stabilized.
 
-The **`stx`** branch is the active approach: a custom STinG driver
-(`MDNET.STX`, port name "WiFi") talking to the RP over a purpose-built
-cart-bus mailbox instead of NE2000 register emulation. It reuses the
-WiFi bridge and everything learned about STinG (below); it drops the
-timing-critical serve entirely. DHCP for the ST becomes possible (the
-RP can acquire a lease on the ST's behalf and hand STinG its config at
-driver init). Base the driver on the EtherNEC STinG driver source
-(`EmmanuelKasper/ethernec`: `ENESTNG.C` implements the full STX port
-API -- `my_send` / `my_receive` / `my_set_state` / `my_cntrl`).
+The **`stx`** branch is the active approach and **it works**: a custom
+STinG driver (`MDNET.STX`, port name "WiFi") talking to the RP over a
+purpose-built cart-bus mailbox instead of NE2000 register emulation.
+Hardware-validated 2026-07-27 -- ping in both directions at 0% loss,
+the handshake in perfect lockstep (`seq == ack`, `err=0`). It reuses
+the WiFi bridge and everything learned about STinG (below) and drops
+the timing-critical serve entirely. The driver is derived from the
+EtherNEC STinG driver (`EmmanuelKasper/ethernec`: `ENESTNG.C`), which
+implements the same port API (`my_send` / `my_receive` /
+`my_set_state` / `my_cntrl`).
+
+Measured characteristics, so nobody re-derives them: round-trip time
+is ~100-170 ms and throughput is **at least ~20 frames/s each way**.
+The RTT shows a sawtooth whose snap-back is ~47 ms, which is the
+period at which STinG services the driver -- the design hands over one
+frame per service, so that cadence bounds both latency and rate. The
+true ceiling is **not** established: an ICMP flood test could not push
+past ~20/s, but the RP received only ~20/s as well, so upstream ICMP
+rate-limiting is an unresolved confound. Measure with TCP (a real
+transfer) before concluding anything, and before building the obvious
+fix (publishing a ring of frames rather than one at a time).
 
 ## Build
 

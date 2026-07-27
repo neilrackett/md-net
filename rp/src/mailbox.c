@@ -328,12 +328,13 @@ void mailbox_poll(void) {
     s_lastRx = s_rxPublished;
     s_lastTx = s_txFrames;
     DPRINTF("mailbox: rx pub=%lu (%lu/s) drop=%lu q=%u tx=%lu (%lu/s) "
-            "err=%lu seq=%u ack=%u hello=%d\n",
+            "err=%lu seq=%u ack=%u/%u hello=%d\n",
             (unsigned long)s_rxPublished, (unsigned long)rxRate,
             (unsigned long)s_rxDropped, (unsigned)rxq_depth(),
             (unsigned long)s_txFrames, (unsigned long)txRate,
             (unsigned long)s_txErrors, (unsigned)s_rxSeq,
-            (unsigned)s_rxAckLow, (int)s_driverHello);
+            (unsigned)s_rxAckLow, (unsigned)(s_rxSeq & 0xFFu),
+            (int)s_driverHello);
   }
 }
 

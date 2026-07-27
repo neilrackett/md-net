@@ -6,54 +6,43 @@ Microfirmware for the [SidecarTridge Multi-device](https://sidecartridge.com) by
 
 Welcome to MD/Net: Wireless Internet for your Atari ST!
 
-MD/Net turns your SidecarT into a wireless network adapter by emulating the [NetUSBee](https://hardware.atari.org/netusbee/netus.htm)'s NE2000 Ethernet controller on the cartridge port, enabling you to connect your Atari ST to the internet using your SidecarT's built-in WiFi, you don't even need to enter your WiFi credentials, MD/Net does it all for you.
+MD/Net turns your SidecarT into a wireless network adapter for your Atari ST, bridging the cartridge port to your WiFi network. It reuses the WiFi credentials you already gave your SidecarT, so there is nothing extra to configure — no wires, no soldering.
 
-And because MD/Net presents itself as a standard NE2000, exactly like the NetUSBee, existing Atari networking stacks work unmodified:
+Networking on the ST is provided by **[STinG](https://github.com/th-otto/STinG)** under plain TOS, driven by MD/Net's own port driver, `MDNET.STX`, which appears in STinG as a port named "WiFi". The driver and the cartridge talk over a small purpose-built protocol described in [docs/mailbox-protocol.md](docs/mailbox-protocol.md).
 
-- **[STinG](https://github.com/th-otto/STinG)** under plain TOS, using its EtherNEC driver
-- **MiNTNet / MagiCNet**, using the EtherNEC / EtherNE driver
-
-Real-world NetUSBee + STinG setups reach FTP, HTTP and general internet use, and MD/Net aims at the same bar — no wires, no soldering, just install MD/Net and you're ready to go.
+An earlier approach emulated the [NetUSBee](https://hardware.atari.org/netusbee/netus.htm)'s NE2000 Ethernet controller so that stock drivers would work unmodified. That got as far as a working transmit path and byte-exact receive, but the remote-DMA data port proved too timing-critical to serve reliably from the cartridge bus. It is preserved and documented on the `netusbee` branch. Supporting MiNTNet / MagiCNet is a possible future direction.
 
 > ### ⚠️ Work in progress
 >
-> MD/Net is under active development, and the NE2000 emulation approach on
-> this branch is **paused short of working ping**. Where it stands:
+> **MD/Net works**: an Atari ST running STinG pings the LAN in both
+> directions with 0% packet loss, over WiFi, with no wires and no
+> soldering. Hardware-validated on 2026-07-27.
 >
-> **Working and hardware-verified:**
-> - WiFi bootstrap: the ST prints `MD/Net connected: <IP>` at boot, then GEM.
-> - The full NE2000 probe: STinG's EtherNEC driver detects the "card",
->   reads a byte-exact MAC PROM, and selects the NE2000 personality.
-> - Register file, remote-DMA ring walking, BNRY/CURR bookkeeping.
-> - Transmit end-to-end: STinG's ARP requests and ICMP leave over WiFi.
-> - Receive delivery: LAN frames land in the ring; the driver reads
->   headers and bodies with verified byte-exact serves on most traffic.
+> It gets there with a **custom STinG driver** (`MDNET.STX`, which
+> appears as a port named "WiFi") talking to the cartridge over a
+> purpose-built mailbox protocol — not by emulating a NetUSBee. The
+> NE2000-emulation approach is preserved, documented, and paused on the
+> `netusbee` branch; see [docs/mailbox-protocol.md](docs/mailbox-protocol.md)
+> for the design that replaced it and why.
 >
-> **Not working:** one residual serve corruption remains on ARP-reply
-> body reads (a single byte, `hardware_space`, intermittently serves a
-> stale window byte), so STinG's `process_arp` rejects every reply as
-> malformed, ARP never resolves, and ping shows 100% loss.
+> **What works today:**
+> - WiFi bootstrap: the ST prints `MD/Net connected: <IP>` at boot,
+>   then continues to GEM.
+> - `MDNET.STX` installs into STinG and appears as the port "WiFi".
+> - ARP, IP and ICMP in both directions: `PING` from the ST reaches the
+>   LAN, and the ST answers pings from other machines, at 0% loss.
 >
-> **What a fix needs:** the remote-DMA data-port serve must deliver
-> byte-exact streams under *every* m68k access pattern (movep bursts,
-> polled reads, chained re-arms) with zero mid-stream staleness. The
-> current design (PIO tap + 4-slot pre-staged window + bus-order
-> barriers, see [docs/ne2000-emulation.md](docs/ne2000-emulation.md))
-> got asymptotically close — the remaining bug is a timing interaction
-> between window prestaging and the driver's header→body arm sequence.
-> A hardware-accurate fix likely wants the serve done *entirely in PIO*
-> (address-indexed stream serving without CPU-in-the-loop), or a
-> logic-analyzer capture to pin the exact cycle interleaving.
->
-> Also hard-won and documented in `AGENTS.md`: this specific `ENEC.STX`
-> binary (a BUGGY_HW debug build) reads the 8390 header count
-> **high-byte-first**, opposite to the datasheet — headers must be
-> written to match or every packet detours into its recovery path.
->
-> **The active approach now lives on the `stx` branch:** a custom
-> STinG driver (`MDNET.STX`) that talks to the RP over a simple
-> mailbox protocol instead of NE2000 emulation — trading NetUSBee
-> fidelity for robustness (and enabling DHCP).
+> **Known limits:**
+> - Throughput is at least ~20 frames/s each way; the true ceiling is
+>   not yet established (ICMP rate-limiting upstream muddied the
+>   measurement). Round-trip time is ~100-170 ms, dominated by how often
+>   STinG services the driver rather than by the WiFi link.
+> - TCP applications (FTP, HTTP) are not yet exercised.
+> - The ST's IP is still configured by hand in STNGPORT.CPX; the
+>   protocol has a config block ready for the cartridge to hand the ST
+>   a DHCP-derived address, but that is not wired up yet.
+> - `MDNET.STX` must be copied to the ST's `STING` folder by hand for
+>   now; shipping it on the cartridge with an installer is next.
 
 ## Hardware requirements
 

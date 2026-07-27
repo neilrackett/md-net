@@ -68,3 +68,7 @@ __pycache__/
 .DS_Store
 # Generated boot banner (from version.txt at build time)
 target/atarist/src/version.inc
+
+# Built STinG driver: a build artifact, shipped via dist/
+target/atarist/stx/MDNET.STX
+target/atarist/stx/*.o
