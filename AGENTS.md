@@ -92,7 +92,8 @@ Every build now also produces **`dist/MDNET.STX`** — the custom STinG
 driver (see `target/atarist/stx/`), compiled with the
 `m68k-atari-mint-gcc` cross toolchain inside the same atarist-toolkit
 Docker image. The user installs it in the ST's `STING` folder (with
-`ENEC.STX` removed/disabled) and selects the "WiFi" port in STNGPORT.CPX.
+`ENEC.STX` removed/disabled) and selects the "WiFi" port in STinG
+Port Setup.
 
 Requirements: ARM GNU toolchain (`PICO_TOOLCHAIN_PATH`),
 `atarist-toolkit-docker` (`stcmd`) for the m68k cartridge stub — **Docker
@@ -271,7 +272,7 @@ write macro composes `(reg<<8|data)` then doubles it.
 
 ## ST-side configuration (known-good)
 
-- STinG port IP lives in **STNGPORT.CPX** (saved to `STING.PRT` —
+- STinG port IP lives in **STinG Port Setup** (saved to `STING.PRT` —
   check the hex: a mis-saved netmask `fffcff00` cost a day);
   `ROUTE.TAB` needs `192.168.1.0 → EtherNet 0.0.0.0` + default via the
   router, TAB-separated. `NAMESERVER` in `DEFAULT.CFG` must be set
@@ -289,6 +290,11 @@ write macro composes `(reg<<8|data)` then doubles it.
   (pinned submodules; FatFs config override lives at `rp/src/ff/ffconf.h`).
 - Don't add features to `main.c` — start in `emul.c` / `mdnet.c`.
 - Match the existing C style (`.clang-format` / `.clang-tidy`).
+- **Call ST software by the name users see, not its filename**: it is
+  **STinG Port Setup**, not `STNGPORT.CPX`. Applies to anything a user
+  reads (the installer, `MDNET.TXT`, `README.md`) and to comments, so
+  the two never drift apart. Data files users actually type or rename
+  (`STING.PRT`, `ROUTE.TAB`, `MDNET.STX`) keep their filenames.
 - **New or significantly modified files carry a GPL header**:
   `Copyright (C) <year> Neil Rackett` + `SPDX-License-Identifier:
   GPL-3.0-or-later` (see `tools/bump_version.sh` for the shell form).

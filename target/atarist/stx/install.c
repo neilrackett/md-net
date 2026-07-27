@@ -202,8 +202,8 @@ void install_main(void) {
     disable_enec(folder);
     say("\r\nDone. Now:\r\n");
     say("1. Reboot your ST.\r\n");
-    say("2. Open STNGPORT.CPX and set up\r\n");
-    say("   the port named \"WiFi\".\r\n");
+    say("2. Open STinG Port Setup and set\r\n");
+    say("   up the port named \"WiFi\".\r\n");
     say("\r\nSee MDNET.TXT for the details.\r\n");
   } else if (failed) {
     say("\r\nInstall failed. Is the disk\r\n");

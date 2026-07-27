@@ -14,7 +14,7 @@
  *
  * The result goes into the mailbox config block; MDNET.STX applies it
  * at port activation, and installs matching routes, so a stock ST needs
- * no STNGPORT.CPX address and no ROUTE.TAB editing.
+ * no address set in STinG Port Setup and no ROUTE.TAB editing.
  *
  * Addresses are probed from the Pico's own host number upwards, so a
  * Pico on .241 offers the ST .242 -- stable across reboots, and outside

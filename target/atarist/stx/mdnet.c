@@ -492,7 +492,7 @@ static void install_routes(uint32 gateway) {
 
 /* Take the address the cartridge chose for us.
 
-   Called twice: once at install, so STNGPORT.CPX shows the address
+   Called twice: once at install, so STinG Port Setup shows the address
    straight away on a machine that has never been configured, and again
    at activation, by which point STinG has applied any saved settings
    and the user's own address (if there is one) must win.
@@ -753,7 +753,7 @@ void cdecl driver_main(BASPAG *bp) {
   }
 
   {
-    int16 i;  /* publish the MAC now: STNGPORT.CPX may query it before
+    int16 i;  /* publish the MAC now: STinG Port Setup may query it before
                  the port is ever activated */
     for (i = 0; i < 6; i++) my_mac[i] = mb_r8(MB_MAC_OFF + i);
   }
@@ -772,7 +772,7 @@ void cdecl driver_main(BASPAG *bp) {
 
   if (tpl != NULL && stx != NULL) {
     install(bp);
-    /* Pre-fill the port so STNGPORT.CPX opens with an address already
+    /* Pre-fill the port so STinG Port Setup opens with an address already
        in it on a machine that has never been configured. Routes wait
        until activation (see adopt_config). */
     adopt_config(FALSE);

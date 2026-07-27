@@ -181,7 +181,7 @@ void emul_start() {
                (unsigned)(stIp >> 24), (unsigned)((stIp >> 16) & 0xFFu),
                (unsigned)((stIp >> 8) & 0xFFu), (unsigned)(stIp & 0xFFu));
     } else {
-      // No address to offer: the ST keeps whatever STNGPORT.CPX holds,
+      // No address to offer: the ST keeps whatever STinG Port Setup holds,
       // so show ours rather than an address it will not be using.
       ip_addr_t ip = network_getCurrentIp();
       snprintf(msg, sizeof(msg), "MD/Net connected: %s (set ST IP)\r\n\r\n",

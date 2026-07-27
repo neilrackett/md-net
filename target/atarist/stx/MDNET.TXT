@@ -41,8 +41,8 @@ CONFIGURING
 Nothing to do. MD/Net picks an address for your ST from your own
 network, checks nothing else is using it, and sets up the routing.
 
-To choose the address yourself instead, open the STinG control panel
-(STNGPORT.CPX), select the port named "WiFi", set the address and
+To choose the address yourself instead, open STinG Port Setup,
+select the port named "WiFi", set the address and
 subnet mask you want, and make sure the port is Active. An address
 you set by hand always wins.
 
