@@ -285,9 +285,15 @@ write macro composes `(reg<<8|data)` then doubles it.
 ## ST-side configuration (known-good)
 
 - STinG port IP lives in **STinG Port Setup** (saved to `STING.PRT` —
-  check the hex: a mis-saved netmask `fffcff00` cost a day);
-  `ROUTE.TAB` needs `192.168.1.0 → EtherNet 0.0.0.0` + default via the
-  router, TAB-separated. `NAMESERVER` in `DEFAULT.CFG` must be set
+  check the hex: a mis-saved netmask `fffcff00` cost a day).
+  `ROUTE.TAB` is four whitespace-separated fields — network, mask,
+  port, gateway — and `INSTALL.TOS` now writes it, so hand-editing is
+  the fallback. Two things verified in STinG's own parser
+  (`sting/ip.c`, `fetch_line`): fields may be separated by **spaces or
+  tabs** (the "must be TAB-separated" lore is stricter than reality,
+  though we write tabs since every version takes them), and the port
+  name is matched with `strcmp` — so it must read exactly `WiFi`.
+  Lines not starting with a digit are skipped, so comments are safe. `NAMESERVER` in `DEFAULT.CFG` must be set
   before DNS tests. Only `ENEC.STX` active (`ENEC_DBG.ST_` disabled).
 - Reserve the ST's static IP in the router's DHCP settings.
 - Warm-reset caveat: after `mdnet_activate()` repaints the register map,

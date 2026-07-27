@@ -23,8 +23,11 @@ WHAT YOU NEED
 INSTALLING
 
 Run INSTALL.TOS. It copies MDNET.STX and this file into your STING
-folder, deactivates any EtherNEC driver it finds (ENEC.STX becomes
-ENEC.ST_), and tells you what it did.
+folder, sets up ROUTE.TAB for you, deactivates any EtherNEC driver it
+finds (ENEC.STX becomes ENEC.ST_), and tells you what it did.
+
+An existing ROUTE.TAB that already mentions the WiFi port is left
+alone, so your own routing is never overwritten.
 
 The files come from the cartridge itself, so the driver you get always
 matches the firmware you are running.
