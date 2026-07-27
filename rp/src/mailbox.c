@@ -62,6 +62,11 @@ static inline void mb_w32(uint32_t off, uint32_t v) {
 
 // ---- RX publish queue (WiFi tap -> mailbox window) ----
 
+// Set to 1 to log every bridged frame (see mailbox_tx_complete).
+#ifndef MAILBOX_TRACE_FRAMES
+#define MAILBOX_TRACE_FRAMES 0
+#endif
+
 #define RXQ_SLOTS 8u
 static struct {
   volatile uint16_t head, tail;
@@ -157,11 +162,17 @@ static void mailbox_tx_complete(uint8_t seqByte) {
     } else {
       s_txFrames++;
     }
+#if MAILBOX_TRACE_FRAMES
+    // Per-frame tracing is OFF by default: one line is ~110 chars, and a
+    // blocking UART write at 115200 stalls Core 0 for ~10 ms -- inside
+    // the very loop that publishes RX and drains TX, so it inflates the
+    // latency it is meant to measure. Turn on only to inspect frames.
     DPRINTF("mailbox: TX len=%u [%02x %02x %02x %02x %02x %02x | %02x %02x "
             "%02x %02x %02x %02x | %02x %02x]\n",
             (unsigned)s_txLen, s_txBuf[0], s_txBuf[1], s_txBuf[2], s_txBuf[3],
             s_txBuf[4], s_txBuf[5], s_txBuf[6], s_txBuf[7], s_txBuf[8],
             s_txBuf[9], s_txBuf[10], s_txBuf[11], s_txBuf[12], s_txBuf[13]);
+#endif
 #else
     s_txFrames++;
 #endif
@@ -304,15 +315,25 @@ void mailbox_poll(void) {
   mailbox_publish_next();  // no-ops unless the window is free
   // Periodic stats for hardware visibility.
   static uint32_t s_lastStats = 0;
+  static uint32_t s_lastRx = 0, s_lastTx = 0;
   uint32_t now = time_us_32();
-  if (now - s_lastStats > 5000000u) {
+  uint32_t elapsed = now - s_lastStats;
+  if (elapsed > 5000000u) {
+    // Frames/s each way since the last report: with per-frame logging
+    // off, this is how throughput gets measured.
+    uint32_t secs = elapsed / 1000000u;
+    uint32_t rxRate = secs ? (s_rxPublished - s_lastRx) / secs : 0;
+    uint32_t txRate = secs ? (s_txFrames - s_lastTx) / secs : 0;
     s_lastStats = now;
-    DPRINTF("mailbox: rx pub=%lu drop=%lu q=%u tx=%lu err=%lu seq=%u ack=%u "
-            "hello=%d\n",
-            (unsigned long)s_rxPublished, (unsigned long)s_rxDropped,
-            (unsigned)rxq_depth(), (unsigned long)s_txFrames,
-            (unsigned long)s_txErrors, (unsigned)s_rxSeq, (unsigned)s_rxAckLow,
-            (int)s_driverHello);
+    s_lastRx = s_rxPublished;
+    s_lastTx = s_txFrames;
+    DPRINTF("mailbox: rx pub=%lu (%lu/s) drop=%lu q=%u tx=%lu (%lu/s) "
+            "err=%lu seq=%u ack=%u hello=%d\n",
+            (unsigned long)s_rxPublished, (unsigned long)rxRate,
+            (unsigned long)s_rxDropped, (unsigned)rxq_depth(),
+            (unsigned long)s_txFrames, (unsigned long)txRate,
+            (unsigned long)s_txErrors, (unsigned)s_rxSeq,
+            (unsigned)s_rxAckLow, (int)s_driverHello);
   }
 }
 
