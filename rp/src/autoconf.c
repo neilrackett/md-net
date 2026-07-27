@@ -176,6 +176,14 @@ void autoconf_start(void) {
   send_probe(s_candidate);
 }
 
+bool autoconf_done(void) {
+  return s_state == AC_DONE || s_state == AC_FAILED;
+}
+
+uint32_t autoconf_address(void) {
+  return (s_state == AC_DONE) ? s_candidate : 0u;
+}
+
 void autoconf_poll(void) {
   if (s_state != AC_PROBING) {
     return;

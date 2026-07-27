@@ -29,6 +29,10 @@
 
 #include "aconfig.h"
 #include "autoconf.h"
+
+// Ceiling on ARP probing before we announce ourselves: 8 candidates
+// at ~1 s each, plus slack.
+#define AUTOCONF_BUDGET_MS 10000
 #include "cart_shared.h"
 #include "commemul.h"
 #include "debug.h"
@@ -139,32 +143,53 @@ void emul_start() {
     }
   }
 
-  if (err == NETWORK_WIFI_STA_CONN_OK) {
-    ip_addr_t ip = network_getCurrentIp();
-    snprintf(msg, sizeof(msg), "MD/Net connected: %s\r\n\r\n", ip4addr_ntoa(&ip));
-    mdnet_publishResult(CART_MDNET_STATUS_CONNECTED, msg);
-  } else {
+  if (err != NETWORK_WIFI_STA_CONN_OK) {
     snprintf(msg, sizeof(msg), "MD/Net: WiFi connection failed (%s)\r\n\r\n",
              network_WifiStaConnStatusString(err));
     mdnet_publishResult(CART_MDNET_STATUS_FAILED, msg);
+    DPRINTF("%s", msg);
+  } else {
+    // Bring up the cart-bus mailbox: publishes the protocol magic, MAC
+    // and network config into the ROM4 window and installs the WiFi RX
+    // tap (which autoconf needs, to see ARP replies). The cartridge
+    // image is left intact -- the mailbox fields live outside it, so
+    // even a warm reset still boots with the banner.
+    mailbox_init();
+
+    // Publish the installer's payload (the driver + its notes) into the
+    // ROM4 window. Cheap, one-off, and it means INSTALL.PRG always
+    // writes the driver matching this firmware.
+    payload_publish();
+
+    // Choose an address for the ST out of our own subnet, so a stock
+    // machine needs no manual IP configuration. Finish this before
+    // announcing ourselves: the address the ST will use is the one
+    // worth putting on screen, and the ST is still polling for a
+    // terminal status meanwhile (its own timeout is 65 s, and the
+    // worst case here is a few seconds of ARP probing).
+    autoconf_start();
+    absolute_time_t deadline = make_timeout_time_ms(AUTOCONF_BUDGET_MS);
+    while (!autoconf_done() && !time_reached(deadline)) {
+      autoconf_poll();
+      network_safePoll();
+      cyw43_arch_wait_for_work_until(make_timeout_time_ms(1));
+    }
+
+    uint32_t stIp = autoconf_address();
+    if (stIp != 0u) {
+      snprintf(msg, sizeof(msg), "MD/Net connected: %u.%u.%u.%u\r\n\r\n",
+               (unsigned)(stIp >> 24), (unsigned)((stIp >> 16) & 0xFFu),
+               (unsigned)((stIp >> 8) & 0xFFu), (unsigned)(stIp & 0xFFu));
+    } else {
+      // No address to offer: the ST keeps whatever STNGPORT.CPX holds,
+      // so show ours rather than an address it will not be using.
+      ip_addr_t ip = network_getCurrentIp();
+      snprintf(msg, sizeof(msg), "MD/Net connected: %s (set ST IP)\r\n\r\n",
+               ip4addr_ntoa(&ip));
+    }
+    mdnet_publishResult(CART_MDNET_STATUS_CONNECTED, msg);
+    DPRINTF("%s", msg);
   }
-  DPRINTF("%s", msg);
-
-  // Bring up the cart-bus mailbox: publishes the protocol magic, MAC
-  // and network config into the ROM4 window and installs the WiFi RX
-  // tap. The cartridge image (banner + magic) is left intact -- the
-  // mailbox fields live outside it, so even a warm reset still boots
-  // with the banner.
-  mailbox_init();
-
-  // Publish the installer's payload (the driver + its notes) into the
-  // ROM4 window. Cheap, one-off, and it means INSTALL.PRG always writes
-  // the driver matching this firmware.
-  payload_publish();
-
-  // Choose an address for the ST out of our own subnet, so a stock
-  // machine needs no manual IP configuration.
-  autoconf_start();
 
   // Idle loop: drain the ROM3 command ring into the mailbox, publish
   // queued RX frames, service lwIP/cyw43 and the SELECT button. Nothing
