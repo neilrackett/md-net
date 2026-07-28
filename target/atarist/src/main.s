@@ -225,13 +225,11 @@ install_cart_run:
 	tst.l d0
 	bgt.s .got_malloc
 
-	moveq #0,d4							; no Malloc: borrow the stack
-	sub.l #INSTALL_TOTAL,sp
+	sub.l #INSTALL_TOTAL,sp				; no Malloc: borrow the stack
 	move.l sp,a3
 	bra.s .copy_installer
 
 .got_malloc:
-	moveq #1,d4
 	move.l d0,a3
 
 .copy_installer:
@@ -250,13 +248,13 @@ install_cart_run:
 	jsr (a3)
 	addq.l #4,sp
 
-	tst.w d4
-	beq.s .restore_stack
-	move.l a3,-(sp)
-	move.w #Mfree,-(sp)
-	trap #1
-	addq.l #6,sp
-
+; Deliberately not freeing: returning from here bombed with a bus error
+; (2 bombs) on hardware, and Mfree is the only thing on the exit path
+; that touches memory ownership. A cartridge entry is not reached
+; through a normal Pexec, so the block is not ours to give back in the
+; way GEMDOS expects. The cost is one ~13 KB block for the rest of the
+; session, from an installer that is run once; the alternative is
+; bombing every time it exits.
 .restore_stack:
 	move.l a6,sp
 	movem.l (sp)+,d2-d7/a2-a6
