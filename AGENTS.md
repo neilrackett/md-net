@@ -39,7 +39,10 @@ Milestones: **v0.1.0** — WiFi bootstrap, `Cconws` boot banner
 installed from the cartridge and the ST configured for the user
 (done, hardware-validated 2026-07-27: INSTALL.TOS writes the driver,
 STinG Port Setup opens pre-filled with an ARP-probed address, ping 0%
-loss both ways; the user still ticks Active once).
+loss both ways; the user still ticks Active once). **v0.4.0** — the
+installer ships on the cartridge itself and the web works: CAB loaded
+frogfind.com by hostname over WiFi on a stock ST (done,
+hardware-validated 2026-07-28).
 
 The minor version bumps per milestone; **every `make debug` auto-bumps
 the patch** so each flashed image is identifiable. **Tagging a

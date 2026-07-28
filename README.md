@@ -14,11 +14,12 @@ An earlier approach emulated the [NetUSBee](https://hardware.atari.org/netusbee/
 
 > ### ⚠️ Work in progress
 >
-> **MD/Net works.** An Atari ST running STinG reaches the network in
-> both directions at 0% packet loss, over WiFi, with no wires and no
-> soldering — and sets itself up: run one program and the driver, IP
-> address, netmask, routing and nameserver are all configured for you.
-> Hardware-validated 2026-07-28.
+> **MD/Net works.** An Atari ST browses the web over WiFi through a
+> SidecarTridge Multi-device, with no wires and no soldering — CAB
+> loading a site by hostname, on a stock 68000. Everything needed is on
+> the cartridge: open it from the desktop, run `INSTALL.TOS`, and the
+> driver, IP address, netmask, routing and nameserver are all set up
+> for you. Hardware-validated 2026-07-28.
 >
 > It gets there with a **custom STinG driver** (`MDNET.STX`, which
 > appears as a port named "WiFi") talking to the cartridge over a
