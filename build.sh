@@ -108,8 +108,13 @@ echo "md5sum of the generated rp.uf2 file:"
 cat dist/rp.uf2.md5sum
 
 # Now inform the user that the build is complet and must
-# modify the app.json file with the new md5sum and the UUID
-echo "Build completed successfully. Please update the app.json file with the new md5sum and the UUID"
+# The app descriptor is filled in below from desc/app.json -- the UUID,
+# the binary's md5 and the version are substituted automatically, so
+# there is nothing to update by hand. (The template this was forked from
+# printed a "please update app.json" notice here, which read like a
+# warning about stale data and sent us looking for a problem that did
+# not exist.)
+echo "Build completed successfully"
 
 # Rename the file to the standard name <APP_UUID>.uf2
 mv dist/rp.uf2 dist/$APP_UUID_KEY.uf2

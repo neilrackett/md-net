@@ -1,7 +1,7 @@
 {
   "uuid": "<APP_UUID>",
   "name": "MD/Net: Wireless Internet",
-  "description": "Wireless internet on your Atari ST. NetUSBee-compatible Ethernet-over-WiFi that works with STinG and MiNTNet. For more information, see <a href=\"https://neilrackett.com/atarist\">https://neilrackett.com/atarist</a>.",
+  "description": "Wireless internet on your Atari ST that configures itself. Just install STinG from <a href=\"https://hardware.atari.org/files/sfl.zip\">hardware.atari.org</a>, run INSTALL.TOS from the cartridge on your Desktop, click activate in the control panel and you're ready to go. For more information, see <a href=\"https://neilrackett.com/atarist\">https://neilrackett.com/atarist</a>.",
   "image": "https://atarist.neilrackett.com/<APP_UUID>.png",
   "tags": [
     "Network"
