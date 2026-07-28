@@ -289,7 +289,7 @@ static char upper(char c) {
   return (c >= 'a' && c <= 'z') ? (char)(c - 'a' + 'A') : c;
 }
 
-/* Is NAMESERVER already set to something?
+/* Find the NAMESERVER setting in the buffer.
 
    This has to be a line scan, not a substring search: DEFAULT.CFG
    explains NAMESERVER in its own comments, so the word appears several
@@ -300,8 +300,15 @@ static char upper(char c) {
    very beginning of a line (an indented line is skipped, which is also
    why "# NAMESERVER ..." in a comment cannot match), and names are
    compared case-insensitively. Matching those exactly means we agree
-   with STinG about what counts as "already set". */
-static short has_nameserver(void) {
+   with STinG about what counts as set.
+
+   Returns NS_NONE, NS_SET, or NS_EMPTY; for the latter two, *start and
+   *len delimit the line so it can be replaced in place. */
+#define NS_NONE 0
+#define NS_SET 1
+#define NS_EMPTY 2
+
+static short find_nameserver(long *start, long *len) {
   char *p = copy_buf;
   while (*p) {
     char *line = p;
@@ -314,15 +321,20 @@ static short has_nameserver(void) {
       if (*n == '\0') {
         while (w < p && (*w == ' ' || *w == '\t')) w++;
         if (w < p && *w == '=') {
+          *start = (long)(line - copy_buf);
+          *len = (long)(p - line);
           w++;
           while (w < p && (*w == ' ' || *w == '\t')) w++;
-          if (w < p && *w >= '0' && *w <= '9') return 1;  /* has a value */
+          /* Anything the user typed counts as theirs, even if STinG
+             would reject it: only a genuinely blank value is unset.
+             Being stricter here would mean overwriting their text. */
+          return (w < p) ? NS_SET : NS_EMPTY;
         }
       }
     }
     while (*p == '\r' || *p == '\n') p++;
   }
-  return 0;
+  return NS_NONE;
 }
 
 /* Point STinG's resolver at the DNS server the cartridge is using, so
@@ -337,6 +349,8 @@ static void write_nameserver(const char *folder) {
   char *end = text;
   unsigned long dns;
   long fh, len;
+  long ns_at = 0, ns_len = 0;
+  short found;
 
   dns = rd32(MB_CFG_DNS_OFF);
   if (dns == 0) {
@@ -354,8 +368,67 @@ static void write_nameserver(const char *folder) {
 
   len = slurp(path);
   if (len < 0) return;
-  if (has_nameserver()) return;
+  found = find_nameserver(&ns_at, &ns_len);
+  if (found == NS_SET) return; /* the user's own choice; leave it */
 
+  strcpy_(end, "NAMESERVER  = ");
+  while (*end) end++;
+  end = put_ip(end, dns);
+
+  if (found == NS_EMPTY && len < (long)sizeof(copy_buf) - 1) {
+    /* Fill in the entry that is already there rather than leaving a
+       blank one above a second copy at the end of the file. The whole
+       file is in memory, so it is written back around the replaced
+       line -- via a temporary first, so the original is only removed
+       once its replacement is safely on disk. */
+    char tmp[64];
+    long ok;
+    strcpy_(tmp, folder);
+    strcat_(tmp, "\\DEFAULT.NEW");
+    fh = Fcreate(tmp, 0);
+    if (fh < 0) return;
+    ok = 1;
+    if (ns_at > 0 && Fwrite((short)fh, ns_at, copy_buf) != ns_at) ok = 0;
+    if (ok && Fwrite((short)fh, (long)(end - text), text) != (long)(end - text))
+      ok = 0;
+    if (ok) {
+      long rest_at = ns_at + ns_len;
+      long rest = len - rest_at;
+      if (rest > 0 &&
+          Fwrite((short)fh, rest, copy_buf + rest_at) != rest) ok = 0;
+    }
+    Fclose((short)fh);
+    if (!ok) {
+      Fdelete(tmp);
+      say("\r\nNOTE: could not write DEFAULT.CFG.\r\n");
+      return;
+    }
+    if (Fdelete(path) != 0L) {
+      /* Read-only, most likely. The original is untouched, so just
+         tidy up and say so rather than leave a stray file and an
+         unexplained missing setting. */
+      Fdelete(tmp);
+      say("\r\nNOTE: DEFAULT.CFG is protected, so\r\n");
+      say("NAMESERVER was not set.\r\n");
+      return;
+    }
+    if (Frename(0, tmp, path) != 0L) {
+      /* The original has already gone. The whole file is still in
+         memory, so put it back rather than leave the user with no
+         configuration at all. */
+      fh = Fcreate(path, 0);
+      if (fh >= 0) {
+        Fwrite((short)fh, len, copy_buf);
+        Fclose((short)fh);
+      }
+      say("\r\nNOTE: could not update DEFAULT.CFG.\r\n");
+      return;
+    }
+    say("Set NAMESERVER in DEFAULT.CFG\r\n");
+    return;
+  }
+
+  /* No entry at all (or a file too big to rewrite safely): append. */
   fh = Fopen(path, 2); /* read/write, does not truncate */
   if (fh < 0) return;
   len = Fseek(0L, (short)fh, 2);
@@ -363,14 +436,16 @@ static void write_nameserver(const char *folder) {
     char last = '\n';
     Fseek(len - 1L, (short)fh, 0);
     if (Fread((short)fh, 1L, &last) == 1L && last != '\n') {
-      *end++ = '\r';
-      *end++ = '\n';
+      /* Start a fresh line: appending onto a file with no trailing
+         newline would corrupt its last entry as well as ours. */
+      long two = 2;
+      if (Fwrite((short)fh, two, "\r\n") != two) {
+        Fclose((short)fh);
+        return;
+      }
     }
     Fseek(0L, (short)fh, 2);
   }
-  strcpy_(end, "NAMESERVER  = ");
-  while (*end) end++;
-  end = put_ip(end, dns);
   *end++ = '\r';
   *end++ = '\n';
   if (Fwrite((short)fh, (long)(end - text), text) == (long)(end - text)) {
