@@ -165,6 +165,33 @@ make uart
 
 MD/Net only builds for the `pico_w` board, since WiFi is required. The app UUID is taken from `uuid.txt` (generate a fresh one per app). If you'd like more information about coding for the SidecarT, [the docs are here](https://docs.sidecartridge.com/sidecartridge-multidevice/programming/).
 
+## The road not taken
+
+MD/Net began as a NetUSBee emulator: reproduce the NE2000 on the
+cartridge bus and every existing Atari networking stack would work
+unmodified. That approach got surprisingly far — a byte-exact MAC PROM,
+the driver selecting the NE2000 personality, correct ring bookkeeping,
+ARP requests and ICMP genuinely leaving over WiFi — and then stalled on
+one thing: the NE2000's remote-DMA data port must return a new byte on
+every read, at bus speed, and the ST reads it back-to-back with
+`MOVEP.L`. Serving that reliably from a microcontroller reacting to bus
+events proved a step too far; a single stale byte in an ARP reply was
+enough for the driver to reject it.
+
+That work is preserved on the **[`netusbee`](../../tree/netusbee)**
+branch — around fifty hardware-tested builds, with the reasoning, the
+diagnostic techniques and the dead ends written up in its `AGENTS.md`.
+It is left there as a curiosity, and in case it is useful to anyone
+attempting something similar. Notably, that branch also documents a
+discovery that outlived it: the `ENEC.STX` binary in circulation reads
+the 8390 receive header's byte count **high byte first**, opposite to
+the datasheet.
+
+The lesson that produced this project's design: the cartridge port is
+excellent at serving static memory and capturing writes, and poor at
+anything that must respond within a bus cycle. The mailbox protocol is
+built entirely out of the first two.
+
 ## Acknowledgements
 
 - The [EtherNEC / EtherNE driver](https://github.com/EmmanuelKasper/ethernec) by Dr. Thomas Redelberger, itself built on code by Peter Rottengatter. `MDNET.STX` is derived from its STinG port driver: the ARP engine, the send/receive/set_state/cntrl structure and the STinG install handshake come from there, with the NE2000 hardware layer replaced by the MD/Net mailbox. Licensed under the GPL, as this is.
