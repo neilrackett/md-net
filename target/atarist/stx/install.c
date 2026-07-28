@@ -58,23 +58,31 @@ static void say(const char *s) { (void)Cconws(s); }
 
 /* ---- filesystem ------------------------------------------------- */
 
-static char dta_buf[44];
+/* All mutable state lives here, owned by install_main. Cartridge code
+   runs from ROM, where writes go nowhere, so the installer must keep
+   nothing writable of its own -- a workspace pointer is threaded
+   through instead of using statics. Verified by the absence of any
+   relocation against .bss in the built object. */
+typedef struct {
+  char dta[44];
+  char buf[8192];
+} WORK;
 
-/* Scratch buffer, also used to stage payload writes: the payload lives
-   in cartridge ROM, and GEMDOS hands whole-sector writes straight to
-   Rwabs -- a DMA transfer on the ST, and the DMA controller can only
-   read DRAM. Passing it a cartridge address would write garbage to disk
-   while Fwrite still reported success, so bytes are copied here with
+/* WORK.buf also stages payload writes: the payload lives in cartridge
+   ROM, and GEMDOS hands whole-sector writes straight to Rwabs -- a DMA
+   transfer on the ST, and the DMA controller can only read DRAM.
+   Passing it a cartridge address would write garbage to disk while
+   Fwrite still reported success, so bytes are copied through RAM with
    the CPU first. */
-static char copy_buf[8192];
+#define BUF_SIZE 8192
 
 /* Does `path` exist? attr 0x10 also matches subdirectories, so this
    serves for both the STING folder and the files inside it. */
-static short exists(const char *path) {
+static short exists(WORK *w, const char *path) {
   void *save = (void *)Fgetdta();
   short found;
   /* mintlib's Fsetdta macro casts to long, so no DTA type needed. */
-  Fsetdta(dta_buf);
+  Fsetdta(w->dta);
   found = (Fsfirst(path, 0x10) == 0L);
   Fsetdta(save);
   return found;
@@ -82,7 +90,7 @@ static short exists(const char *path) {
 
 /* Locate a STinG installation. Drives A: and B: are skipped so a
    floppyless machine is never asked to insert a disk. */
-static short find_sting(char *out) {
+static short find_sting(WORK *w, char *out) {
   char probe[16];
   char drive;
   for (drive = 'C'; drive <= 'P'; drive++) {
@@ -90,7 +98,7 @@ static short find_sting(char *out) {
     probe[1] = ':';
     probe[2] = '\\';
     strcpy_(probe + 3, "STING");
-    if (exists(probe)) {
+    if (exists(w, probe)) {
       strcpy_(out, probe);
       return 1;
     }
@@ -99,7 +107,7 @@ static short find_sting(char *out) {
 }
 
 /* Write one payload file into the STinG folder. */
-static short write_file(const char *folder, const char *name,
+static short write_file(WORK *w, const char *folder, const char *name,
                         unsigned long off, unsigned long len) {
   char path[64];
   long fh;
@@ -115,11 +123,11 @@ static short write_file(const char *folder, const char *name,
   while (done < len) {
     unsigned long chunk = len - done;
     unsigned long i;
-    if (chunk > sizeof(copy_buf)) chunk = sizeof(copy_buf);
+    if (chunk > BUF_SIZE) chunk = BUF_SIZE;
     for (i = 0; i < chunk; i++) {
-      copy_buf[i] = (char)rd8(off + done + i);  /* CPU read, not DMA */
+      w->buf[i] = (char)rd8(off + done + i);  /* CPU read, not DMA */
     }
-    if (Fwrite((short)fh, (long)chunk, copy_buf) != (long)chunk) {
+    if (Fwrite((short)fh, (long)chunk, w->buf) != (long)chunk) {
       Fclose((short)fh);
       return 0;
     }
@@ -134,17 +142,17 @@ static short write_file(const char *folder, const char *name,
    .ST_ -- the same convention STinG users already use for drivers they
    want to keep but not load. Two active Ethernet drivers is the most
    common way to end up with a port that never works. */
-static void disable_enec(const char *folder) {
+static void disable_enec(WORK *w, const char *folder) {
   char from[64], to[64];
   strcpy_(from, folder);
   strcat_(from, "\\ENEC.STX");
-  if (!exists(from)) return;
+  if (!exists(w, from)) return;
   strcpy_(to, folder);
   strcat_(to, "\\ENEC.ST_");
   /* Say so when it cannot be done: silently leaving two Ethernet
      drivers active is the failure this is meant to prevent, and the
      user would have no idea. */
-  if (exists(to) || Frename(0, from, to) != 0L) {
+  if (exists(w, to) || Frename(0, from, to) != 0L) {
     say("\r\nNOTE: could not disable ENEC.STX.\r\n");
     say("Rename it by hand or the WiFi port\r\n");
     say("may not work.\r\n");
@@ -196,7 +204,7 @@ static char *put_route(char *d, unsigned long net, unsigned long mask,
    when there is no ROUTE.TAB at all. An existing file that already
    mentions the port is left completely alone -- the user's routing is
    their business. */
-static void write_routes(const char *folder) {
+static void write_routes(WORK *w, const char *folder) {
   char path[64];
   char text[160];
   char *end = text;
@@ -217,17 +225,17 @@ static void write_routes(const char *folder) {
   strcpy_(path, folder);
   strcat_(path, "\\ROUTE.TAB");
 
-  if (exists(path)) {
+  if (exists(w, path)) {
     /* Already routed for us? Then leave it be. */
     fh = Fopen(path, 0);
     if (fh < 0) return;
-    len = Fread((short)fh, (long)sizeof(copy_buf) - 1, copy_buf);
+    len = Fread((short)fh, (long)BUF_SIZE - 1, w->buf);
     Fclose((short)fh);
     if (len < 0) return;
-    copy_buf[len] = '\0';
+    w->buf[len] = '\0';
     {
       char *p;
-      for (p = copy_buf; *p; p++) {
+      for (p = w->buf; *p; p++) {
         if (p[0] == 'W' && p[1] == 'i' && p[2] == 'F' && p[3] == 'i') return;
       }
     }
@@ -274,14 +282,14 @@ static void write_routes(const char *folder) {
 
 /* Read a whole file into copy_buf, NUL-terminated. Returns its length,
    or -1. */
-static long slurp(const char *path) {
+static long slurp(WORK *w, const char *path) {
   long fh, len;
   fh = Fopen(path, 0);
   if (fh < 0) return -1L;
-  len = Fread((short)fh, (long)sizeof(copy_buf) - 1, copy_buf);
+  len = Fread((short)fh, (long)BUF_SIZE - 1, w->buf);
   Fclose((short)fh);
   if (len < 0) return -1L;
-  copy_buf[len] = '\0';
+  w->buf[len] = '\0';
   return len;
 }
 
@@ -308,27 +316,27 @@ static char upper(char c) {
 #define NS_SET 1
 #define NS_EMPTY 2
 
-static short find_nameserver(long *start, long *len) {
-  char *p = copy_buf;
+static short find_nameserver(WORK *w, long *start, long *len) {
+  char *p = w->buf;
   while (*p) {
     char *line = p;
     while (*p && *p != '\r' && *p != '\n') p++;
     {
       const char *want = "NAMESERVER";
-      char *w = line;
+      char *s = line;  /* not `w`: that is the workspace */
       const char *n = want;
-      while (*n && w < p && upper(*w) == *n) { w++; n++; }
+      while (*n && s < p && upper(*s) == *n) { s++; n++; }
       if (*n == '\0') {
-        while (w < p && (*w == ' ' || *w == '\t')) w++;
-        if (w < p && *w == '=') {
-          *start = (long)(line - copy_buf);
+        while (s < p && (*s == ' ' || *s == '\t')) s++;
+        if (s < p && *s == '=') {
+          *start = (long)(line - w->buf);
           *len = (long)(p - line);
-          w++;
-          while (w < p && (*w == ' ' || *w == '\t')) w++;
+          s++;
+          while (s < p && (*s == ' ' || *s == '\t')) s++;
           /* Anything the user typed counts as theirs, even if STinG
              would reject it: only a genuinely blank value is unset.
              Being stricter here would mean overwriting their text. */
-          return (w < p) ? NS_SET : NS_EMPTY;
+          return (s < p) ? NS_SET : NS_EMPTY;
         }
       }
     }
@@ -343,7 +351,7 @@ static short find_nameserver(long *start, long *len) {
    to keep. DEFAULT.CFG is never created from scratch -- STinG needs a
    complete one, and inventing a minimal file would do more harm than
    the missing line. */
-static void write_nameserver(const char *folder) {
+static void write_nameserver(WORK *w, const char *folder) {
   char path[64];
   char text[48];
   char *end = text;
@@ -364,18 +372,18 @@ static void write_nameserver(const char *folder) {
 
   strcpy_(path, folder);
   strcat_(path, "\\DEFAULT.CFG");
-  if (!exists(path)) return;
+  if (!exists(w, path)) return;
 
-  len = slurp(path);
+  len = slurp(w, path);
   if (len < 0) return;
-  found = find_nameserver(&ns_at, &ns_len);
+  found = find_nameserver(w, &ns_at, &ns_len);
   if (found == NS_SET) return; /* the user's own choice; leave it */
 
   strcpy_(end, "NAMESERVER  = ");
   while (*end) end++;
   end = put_ip(end, dns);
 
-  if (found == NS_EMPTY && len < (long)sizeof(copy_buf) - 1) {
+  if (found == NS_EMPTY && len < (long)BUF_SIZE - 1) {
     /* Fill in the entry that is already there rather than leaving a
        blank one above a second copy at the end of the file. The whole
        file is in memory, so it is written back around the replaced
@@ -388,14 +396,14 @@ static void write_nameserver(const char *folder) {
     fh = Fcreate(tmp, 0);
     if (fh < 0) return;
     ok = 1;
-    if (ns_at > 0 && Fwrite((short)fh, ns_at, copy_buf) != ns_at) ok = 0;
+    if (ns_at > 0 && Fwrite((short)fh, ns_at, w->buf) != ns_at) ok = 0;
     if (ok && Fwrite((short)fh, (long)(end - text), text) != (long)(end - text))
       ok = 0;
     if (ok) {
       long rest_at = ns_at + ns_len;
       long rest = len - rest_at;
       if (rest > 0 &&
-          Fwrite((short)fh, rest, copy_buf + rest_at) != rest) ok = 0;
+          Fwrite((short)fh, rest, w->buf + rest_at) != rest) ok = 0;
     }
     Fclose((short)fh);
     if (!ok) {
@@ -418,7 +426,7 @@ static void write_nameserver(const char *folder) {
          configuration at all. */
       fh = Fcreate(path, 0);
       if (fh >= 0) {
-        Fwrite((short)fh, len, copy_buf);
+        Fwrite((short)fh, len, w->buf);
         Fclose((short)fh);
       }
       say("\r\nNOTE: could not update DEFAULT.CFG.\r\n");
@@ -456,7 +464,7 @@ static void write_nameserver(const char *folder) {
 
 /* ---- main ------------------------------------------------------- */
 
-void install_main(void) {
+void install_main(WORK *w) {
   char folder[16];
   unsigned short count, i;
   short installed = 0, failed = 0;
@@ -474,7 +482,7 @@ void install_main(void) {
     goto done;
   }
 
-  if (!find_sting(folder)) {
+  if (!find_sting(w, folder)) {
     say("No STING folder found.\r\n\r\n");
     say("Install STinG first, from:\r\n");
     say("hardware.atari.org/files/sfl.zip\r\n");
@@ -492,7 +500,7 @@ void install_main(void) {
     unsigned short n;
     for (n = 0; n < ENT_NAME; n++) name[n] = (char)rd8(e + n);
     name[ENT_NAME] = '\0';
-    if (write_file(folder, name, rd32(e + 16), rd32(e + 20))) {
+    if (write_file(w, folder, name, rd32(e + 16), rd32(e + 20))) {
       say("  ");
       say(name);
       say("\r\n");
@@ -506,9 +514,9 @@ void install_main(void) {
   }
 
   if (failed == 0 && installed > 0) {
-    disable_enec(folder);
-    write_routes(folder);
-    write_nameserver(folder);
+    disable_enec(w, folder);
+    write_routes(w, folder);
+    write_nameserver(w, folder);
     say("\r\nDone. Now:\r\n");
     say("1. Reboot your ST.\r\n");
     say("2. Open STinG Port Setup and set\r\n");

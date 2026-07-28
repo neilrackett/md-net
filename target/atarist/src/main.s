@@ -99,7 +99,7 @@ get_screen_base		macro
 
 	dc.l $abcdef42 					; magic number
 first:
-	dc.l 0
+	dc.l second
 	dc.l $08000000 + pre_auto		; After GEMDOS init (before booting from disks)
 	dc.l 0
 	dc.w GEMDOS_TIME 				;time
@@ -107,6 +107,21 @@ first:
 	dc.l end_pre_auto - pre_auto
 	dc.b "MDNET",0
     even
+
+; The installer, so there is nothing to copy from another machine: open
+; the cartridge on the desktop and run it. CA_INIT is zero on purpose --
+; the boot ROM only tests the auto-run bits, so an entry without them is
+; skipped at boot and can only be started deliberately. CA_RUN is what
+; the desktop calls, and it returns with an rts.
+second:
+	dc.l 0
+	dc.l 0
+	dc.l install_cart_run
+	dc.w GEMDOS_TIME
+	dc.w GEMDOS_DATE
+	dc.l end_installer - installer_blob
+	dc.b "INSTALL.TOS",0
+	even
 
 pre_auto:
 ; Relocate the content of the cartridge ROM to the RAM
@@ -178,3 +193,77 @@ end_rom_code:
 end_pre_auto:
 	even
 	dc.l 0
+
+
+; ---------------------------------------------------------------------
+; Cartridge installer launcher.
+;
+; The installer is built position-independent (no writable data of its
+; own, everything -mpcrel), so it can run from anywhere -- but it is
+; still copied into RAM first, for the same reason the boot code above
+; is: executing at length from the cartridge window is not dependable.
+;
+; Its workspace has to be writable too, so one allocation covers both:
+; the code, then the WORK struct immediately after it. GEMDOS Malloc is
+; preferred, with a fall back to the stack, because some cartridge
+; launch paths reach here without a usable Malloc arena (a lesson taken
+; from MD/JS, which hit exactly that).
+; ---------------------------------------------------------------------
+
+INSTALL_WORK_SIZE	equ 8240			; sizeof(WORK) in install.c
+INSTALL_BLOB_SIZE	equ (end_installer - installer_blob)
+INSTALL_TOTAL		equ (INSTALL_BLOB_SIZE + INSTALL_WORK_SIZE + 16)
+
+install_cart_run:
+	movem.l d2-d7/a2-a6,-(sp)
+	move.l sp,a6						; so the stack fallback can unwind
+
+	move.l #INSTALL_TOTAL,-(sp)
+	move.w #Malloc,-(sp)
+	trap #1
+	addq.l #6,sp
+	tst.l d0
+	bgt.s .got_malloc
+
+	moveq #0,d4							; no Malloc: borrow the stack
+	sub.l #INSTALL_TOTAL,sp
+	move.l sp,a3
+	bra.s .copy_installer
+
+.got_malloc:
+	moveq #1,d4
+	move.l d0,a3
+
+.copy_installer:
+	move.l a3,a2
+	lea installer_blob(pc),a1
+	move.l #INSTALL_BLOB_SIZE,d6
+	addq.l #1,d6						; round up to whole words
+	lsr.l #1,d6
+	subq.w #1,d6
+.copy_loop:
+	move.w (a1)+,(a2)+
+	dbf d6,.copy_loop
+
+	lea INSTALL_BLOB_SIZE+8(a3),a0		; workspace follows the code
+	move.l a0,-(sp)						; install.c takes it as its argument
+	jsr (a3)
+	addq.l #4,sp
+
+	tst.w d4
+	beq.s .restore_stack
+	move.l a3,-(sp)
+	move.w #Mfree,-(sp)
+	trap #1
+	addq.l #6,sp
+
+.restore_stack:
+	move.l a6,sp
+	movem.l (sp)+,d2-d7/a2-a6
+	rts
+
+	even
+installer_blob:
+	incbin "INSTCART.BIN"
+	even
+end_installer:

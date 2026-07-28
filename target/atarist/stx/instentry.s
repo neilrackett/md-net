@@ -10,7 +10,9 @@
 	.globl	_instentry
 _instentry:
 	lea	stack_top,sp
-	jsr	_install_main
+	pea	workspace		| install_main takes its scratch space from
+	jsr	_install_main		| the caller: it keeps nothing writable of
+	addq.l	#4,sp			| its own, so the same code can run from ROM
 	clr.w	-(sp)			| Pterm0
 	trap	#1
 
@@ -19,3 +21,5 @@ _instentry:
 stack_area:
 	.space	4096
 stack_top:
+workspace:
+	.space	8240			| sizeof(WORK): 44 + 8192, rounded up

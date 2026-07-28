@@ -42,11 +42,6 @@ mkdir dist
 
 # Build the project in the target architecture
 echo "Building target project"
-cd target/atarist
-./build.sh "$SCRIPT_DIR/target/atarist" release
-cd ../..
-echo "Done building target project"
-
 # Build the STinG driver (MDNET.STX) with the m68k-atari-mint GCC cross
 # toolchain from the same atarist-toolkit Docker image. Ships in dist/
 # next to the UF2 -- the user copies it to the ST's STING folder.
@@ -74,6 +69,16 @@ python3 tools/mkpayload.py rp/src/include/mdnet_payload.h \
     MDNET.TXT=target/atarist/stx/MDNET.TXT
 python3 tools/payload_verify.py rp/src/include/mdnet_payload.h \
     target/atarist/stx
+
+# The cartridge image embeds the installer, so it is built after the ST
+# side. INSTCART.BIN is staged next to main.s because vasm resolves
+# incbin relative to the source file.
+cp target/atarist/stx/INSTCART.BIN target/atarist/src/INSTCART.BIN
+echo "Building target project"
+cd target/atarist
+./build.sh "$SCRIPT_DIR/target/atarist" release
+cd ../..
+echo "Done building target project"
 
 # Build the rp project in the RP architecture
 echo "Building rp project"

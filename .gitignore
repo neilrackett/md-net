@@ -79,3 +79,6 @@ target/atarist/stx/INSTALL.TOS
 
 # Local test files for FTP/HTTP throughput testing
 ftptest/
+target/atarist/src/INSTCART.BIN
+target/atarist/stx/INSTCART.BIN
+target/atarist/stx/instcart.prg
