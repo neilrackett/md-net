@@ -332,6 +332,22 @@ write macro composes `(reg<<8|data)` then doubles it.
 - Boot-time SELECT→Booster (in `main.c`) works; runtime SELECT reset
   callbacks are deliberately not wired (spurious edges killed sessions).
 
+## Known platform quirks (not bugs to chase)
+
+- **Returning from a cartridge entry throws a bus error (two bombs).**
+  Running `INSTALL.TOS` from the cartridge works and writes everything
+  correctly; the bombs come as it returns to the desktop, and nothing
+  afterwards is affected. It is not ours: MD/JS's cartridge demo does
+  exactly the same, and removing the `Mfree` from the exit path changed
+  nothing, so it is neither memory ownership nor specific to this
+  installer. Do not spend hardware sessions on it without new evidence.
+- Cartridge code cannot have writable data — the window is served
+  read-only, so writes vanish silently. Anything run from the cartridge
+  must keep its state in RAM it was given (see `install_cart_run` in
+  `target/atarist/src/main.s`, and the `WORK` struct threaded through
+  `install.c`). The Makefile fails the build if the cartridge installer
+  ever needs a relocation, which is what would let a static creep back.
+
 ## Editing guardrails
 
 - **Never modify** `pico-sdk/`, `pico-extras/`, or `fatfs-sdk/`
