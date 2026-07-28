@@ -24,6 +24,7 @@
 #define MB_CFG_IP_OFF 0x4032UL
 #define MB_CFG_MASK_OFF 0x4036UL
 #define MB_CFG_GW_OFF 0x403AUL
+#define MB_CFG_DNS_OFF 0x403EUL
 
 #define ENT_SIZE 24  /* name[16] + offset(4) + length(4) */
 #define ENT_NAME 16
@@ -65,7 +66,7 @@ static char dta_buf[44];
    read DRAM. Passing it a cartridge address would write garbage to disk
    while Fwrite still reported success, so bytes are copied here with
    the CPU first. */
-static char copy_buf[2048];
+static char copy_buf[8192];
 
 /* Does `path` exist? attr 0x10 also matches subdirectories, so this
    serves for both the STING folder and the files inside it. */
@@ -269,6 +270,108 @@ static void write_routes(const char *folder) {
   Fclose((short)fh);
 }
 
+/* ---- DEFAULT.CFG -------------------------------------------------- */
+
+/* Read a whole file into copy_buf, NUL-terminated. Returns its length,
+   or -1. */
+static long slurp(const char *path) {
+  long fh, len;
+  fh = Fopen(path, 0);
+  if (fh < 0) return -1L;
+  len = Fread((short)fh, (long)sizeof(copy_buf) - 1, copy_buf);
+  Fclose((short)fh);
+  if (len < 0) return -1L;
+  copy_buf[len] = '\0';
+  return len;
+}
+
+static char upper(char c) {
+  return (c >= 'a' && c <= 'z') ? (char)(c - 'a' + 'A') : c;
+}
+
+/* Is NAMESERVER already set to something?
+
+   This has to be a line scan, not a substring search: DEFAULT.CFG
+   explains NAMESERVER in its own comments, so the word appears several
+   times in text STinG ignores.
+
+   The rules are STinG's own, taken from its config loader rather than
+   guessed: a setting is only recognised when its name starts at the
+   very beginning of a line (an indented line is skipped, which is also
+   why "# NAMESERVER ..." in a comment cannot match), and names are
+   compared case-insensitively. Matching those exactly means we agree
+   with STinG about what counts as "already set". */
+static short has_nameserver(void) {
+  char *p = copy_buf;
+  while (*p) {
+    char *line = p;
+    while (*p && *p != '\r' && *p != '\n') p++;
+    {
+      const char *want = "NAMESERVER";
+      char *w = line;
+      const char *n = want;
+      while (*n && w < p && upper(*w) == *n) { w++; n++; }
+      if (*n == '\0') {
+        while (w < p && (*w == ' ' || *w == '\t')) w++;
+        if (w < p && *w == '=') {
+          w++;
+          while (w < p && (*w == ' ' || *w == '\t')) w++;
+          if (w < p && *w >= '0' && *w <= '9') return 1;  /* has a value */
+        }
+      }
+    }
+    while (*p == '\r' || *p == '\n') p++;
+  }
+  return 0;
+}
+
+/* Point STinG's resolver at the DNS server the cartridge is using, so
+   host names work without the user editing anything. Only ever appends,
+   and only when nothing is set: a nameserver the user chose is theirs
+   to keep. DEFAULT.CFG is never created from scratch -- STinG needs a
+   complete one, and inventing a minimal file would do more harm than
+   the missing line. */
+static void write_nameserver(const char *folder) {
+  char path[64];
+  char text[48];
+  char *end = text;
+  unsigned long dns;
+  long fh, len;
+
+  dns = rd32(MB_CFG_DNS_OFF);
+  if (dns == 0) return;
+
+  strcpy_(path, folder);
+  strcat_(path, "\\DEFAULT.CFG");
+  if (!exists(path)) return;
+
+  len = slurp(path);
+  if (len < 0) return;
+  if (has_nameserver()) return;
+
+  fh = Fopen(path, 2); /* read/write, does not truncate */
+  if (fh < 0) return;
+  len = Fseek(0L, (short)fh, 2);
+  if (len > 0) {
+    char last = '\n';
+    Fseek(len - 1L, (short)fh, 0);
+    if (Fread((short)fh, 1L, &last) == 1L && last != '\n') {
+      *end++ = '\r';
+      *end++ = '\n';
+    }
+    Fseek(0L, (short)fh, 2);
+  }
+  strcpy_(end, "NAMESERVER  = ");
+  while (*end) end++;
+  end = put_ip(end, dns);
+  *end++ = '\r';
+  *end++ = '\n';
+  if (Fwrite((short)fh, (long)(end - text), text) == (long)(end - text)) {
+    say("Set NAMESERVER in DEFAULT.CFG\r\n");
+  }
+  Fclose((short)fh);
+}
+
 /* ---- main ------------------------------------------------------- */
 
 void install_main(void) {
@@ -323,6 +426,7 @@ void install_main(void) {
   if (failed == 0 && installed > 0) {
     disable_enec(folder);
     write_routes(folder);
+    write_nameserver(folder);
     say("\r\nDone. Now:\r\n");
     say("1. Reboot your ST.\r\n");
     say("2. Open STinG Port Setup and set\r\n");

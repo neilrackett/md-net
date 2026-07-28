@@ -26,8 +26,12 @@ Run INSTALL.TOS. It copies MDNET.STX and this file into your STING
 folder, sets up ROUTE.TAB for you, deactivates any EtherNEC driver it
 finds (ENEC.STX becomes ENEC.ST_), and tells you what it did.
 
-An existing ROUTE.TAB that already mentions the WiFi port is left
-alone, so your own routing is never overwritten.
+It also sets NAMESERVER in DEFAULT.CFG, so web addresses and other
+host names work, not just numeric IP addresses.
+
+Anything you have already set is left alone: a ROUTE.TAB that
+mentions the WiFi port, or a NAMESERVER you chose yourself, is
+never overwritten.
 
 The files come from the cartridge itself, so the driver you get always
 matches the firmware you are running.
@@ -49,8 +53,9 @@ select the port named "WiFi", set the address and
 subnet mask you want, and make sure the port is Active. An address
 you set by hand always wins.
 
-If you want name lookups (web browsing, etc), set NAMESERVER in
-DEFAULT.CFG to your router's address.
+If you would rather use a different DNS server, set NAMESERVER in
+DEFAULT.CFG yourself; the installer only fills it in when it is
+not already set.
 
 Q. Why don't I see "MD/Net connected" message at boot?
 A. Check that the MD/Net firmware is installed and your SidecarTridge

@@ -38,9 +38,9 @@ An earlier approach emulated the [NetUSBee](https://hardware.atari.org/netusbee/
 >   measurement). Round-trip time is ~100-170 ms, dominated by how often
 >   STinG services the driver rather than by the WiFi link.
 > - TCP applications (FTP, HTTP) are not yet exercised.
-> - The ST's IP is still configured by hand in STinG Port Setup; the
->   protocol has a config block ready for the cartridge to hand the ST
->   a DHCP-derived address, but that is not wired up yet.
+> - Throughput is capped at ~20 frames/s each way by the driver handing
+>   STinG one frame per service interval; lifting that is the next
+>   piece of work.
 > - `MDNET.STX` must be copied to the ST's `STING` folder by hand for
 >   now; shipping it on the cartridge with an installer is next.
 
