@@ -293,8 +293,17 @@ write macro composes `(reg<<8|data)` then doubles it.
   tabs** (the "must be TAB-separated" lore is stricter than reality,
   though we write tabs since every version takes them), and the port
   name is matched with `strcmp` — so it must read exactly `WiFi`.
-  Lines not starting with a digit are skipped, so comments are safe. `NAMESERVER` in `DEFAULT.CFG` must be set
-  before DNS tests. Only `ENEC.STX` active (`ENEC_DBG.ST_` disabled).
+  Lines not starting with a digit are skipped, so comments are safe.
+- `DEFAULT.CFG` holds `NAMESERVER`, which `INSTALL.TOS` fills in when it
+  is unset. Its rules also come from STinG's own loader
+  (`sting/install.c`), not guesswork: a setting is recognised only when
+  its name starts at **column 0** (indented lines are ignored, which is
+  also why the word inside a `#` comment cannot match), names compare
+  **case-insensitively** (`toupper`), and `setvstr` replaces — so **the
+  last assignment wins**, which is what makes appending at the end of
+  the file take effect.
+- Only one Ethernet driver active: `INSTALL.TOS` renames `ENEC.STX` to
+  `ENEC.ST_`, the same convention STinG users already use.
 - Reserve the ST's static IP in the router's DHCP settings.
 - Warm-reset caveat: after `mdnet_activate()` repaints the register map,
   the cartridge magic is gone — a warm ST reset boots without the
