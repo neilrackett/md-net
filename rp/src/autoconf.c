@@ -26,11 +26,16 @@
 #ifdef AUTOCONF_HOST_TEST
 #include <stdio.h>
 #else
+#include <stdio.h>
+#include <string.h>
+
 #include "cart_shared.h"
 #include "debug.h"
+#include "gconfig.h"
 #include "lwip/dns.h"
 #include "lwip/netif.h"
 #include "mailbox.h"
+#include "network.h"
 #include "pico/cyw43_arch.h"
 #include "pico/time.h"
 #endif
@@ -157,11 +162,36 @@ void autoconf_start(void) {
   s_ourIp = lwip_ntohl(ip4_addr_get_u32(netif_ip4_addr(n)));
   s_mask = lwip_ntohl(ip4_addr_get_u32(netif_ip4_netmask(n)));
   s_gw = lwip_ntohl(ip4_addr_get_u32(netif_ip4_gw(n)));
+  // Prefer what DHCP gave us -- it is the one that resolves local names
+  // as well. network.c only applies the configured WIFI_DNS on the
+  // static-IP path, so on DHCP that setting is otherwise unused; fall
+  // back to it, since it is a deliberate choice the user can change in
+  // Booster. The gateway is the last resort: most home routers proxy
+  // DNS, but that is a guess rather than a setting.
   s_dns = dns ? lwip_ntohl(ip4_addr_get_u32(dns)) : 0u;
   if (s_dns == 0u) {
-    // Some DHCP servers hand out no DNS option. Home routers almost
-    // always proxy DNS themselves, so the gateway is a far better guess
-    // than nothing -- and the log below says which one the ST got.
+    SettingsConfigEntry *entry =
+        settings_find_entry(gconfig_getContext(), PARAM_WIFI_DNS);
+    if (entry != NULL && entry->value[0] != '\0') {
+      char copy[NETWORK_MAX_STRING_LENGTH * 2 + 2] = {0};
+      char *first = copy;
+      char *comma;
+      u32_t parsed;
+      snprintf(copy, sizeof(copy), "%s", entry->value);
+      comma = strchr(first, ',');  // "8.8.8.8, 8.8.4.4" -- take the first
+      if (comma != NULL) {
+        *comma = '\0';
+      }
+      while (*first == ' ' || *first == '\t') {
+        first++;  // network.c's trim helper is static, and this is all
+      }           // the trimming a leading-space entry needs
+      parsed = ipaddr_addr(first);
+      if (first[0] != '\0' && parsed != IPADDR_NONE) {
+        s_dns = lwip_ntohl(parsed);
+      }
+    }
+  }
+  if (s_dns == 0u) {
     s_dns = s_gw;
   }
 
