@@ -81,7 +81,28 @@ EtherNEC STinG driver (`EmmanuelKasper/ethernec`: `ENESTNG.C`), which
 implements the same port API (`my_send` / `my_receive` /
 `my_set_state` / `my_cntrl`).
 
-Measured characteristics, so nobody re-derives them: round-trip time
+**Performance, measured — do not re-litigate without new evidence.**
+The bridge moves **~21 KB/s each way** (1408-byte ping flood: 15
+frames/s each way, queue full, drops climbing — i.e. genuinely
+saturated). FTP over the same link moves **~2 KB/s**, and that gap is
+*not* ours: during FTP the queue stays empty, nothing is dropped, and
+the ST uses about 4 of the 20+ service opportunities per second. The
+cost is ~266 ms per segment with 536-byte segments (STinG advertises no
+MSS option despite `MSS = 1460`), which points at a delayed ACK plus a
+window holding one segment in flight — inside STinG's TCP or the FTP
+client, not the cartridge.
+
+Four theories were falsified against hardware, each cheap to re-invent:
+(1) RX queue overflow causing retransmits — `drop` is flat throughout
+FTP; (2) a multi-slot RX ring would help — FTP never approaches the
+ceiling; (3) per-frame UART logging was the latency — production build
+A/B showed no change; (4) STinG's `THREADING` service cadence was the
+limit — 50 vs 10 changed nothing across 100 KB and 1 MB transfers,
+after a power cycle, despite the mechanism being confirmed in STinG's
+source (`fraction` divides the 200 Hz timer, `THREADING/5`). Going
+further needs instrumentation inside STinG, not more firmware changes.
+
+Other measured characteristics, so nobody re-derives them: round-trip time
 is ~60-210 ms (mean ~105 ms) and throughput is **~20 frames/s each
 way**. The RTT sawtooth snaps back by ~50 ms, which is how often STinG
 services the driver; combined with the design handing over exactly one
