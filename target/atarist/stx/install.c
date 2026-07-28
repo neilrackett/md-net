@@ -339,7 +339,14 @@ static void write_nameserver(const char *folder) {
   long fh, len;
 
   dns = rd32(MB_CFG_DNS_OFF);
-  if (dns == 0) return;
+  if (dns == 0) {
+    /* Say so: silently skipping looks identical to having worked, and
+       the symptom (host names fail, numeric addresses work) is easy to
+       mistake for a network fault. */
+    say("\r\nNOTE: no DNS from the cartridge, so\r\n");
+    say("NAMESERVER was not set.\r\n");
+    return;
+  }
 
   strcpy_(path, folder);
   strcat_(path, "\\DEFAULT.CFG");

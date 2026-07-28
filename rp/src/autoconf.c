@@ -139,13 +139,15 @@ void autoconf_observe(const uint8_t *frame, uint16_t len) {
 static void publish(uint32_t ip) {
   mailbox_publish_config(ip, s_mask, s_gw, s_dns);
   DPRINTF("autoconf: ST gets %lu.%lu.%lu.%lu mask %lu.%lu.%lu.%lu "
-          "gw %lu.%lu.%lu.%lu\n",
+          "gw %lu.%lu.%lu.%lu dns %lu.%lu.%lu.%lu\n",
           (unsigned long)(ip >> 24), (unsigned long)((ip >> 16) & 0xFF),
           (unsigned long)((ip >> 8) & 0xFF), (unsigned long)(ip & 0xFF),
           (unsigned long)(s_mask >> 24), (unsigned long)((s_mask >> 16) & 0xFF),
           (unsigned long)((s_mask >> 8) & 0xFF), (unsigned long)(s_mask & 0xFF),
           (unsigned long)(s_gw >> 24), (unsigned long)((s_gw >> 16) & 0xFF),
-          (unsigned long)((s_gw >> 8) & 0xFF), (unsigned long)(s_gw & 0xFF));
+          (unsigned long)((s_gw >> 8) & 0xFF), (unsigned long)(s_gw & 0xFF),
+          (unsigned long)(s_dns >> 24), (unsigned long)((s_dns >> 16) & 0xFF),
+          (unsigned long)((s_dns >> 8) & 0xFF), (unsigned long)(s_dns & 0xFF));
 }
 
 void autoconf_start(void) {
@@ -156,6 +158,12 @@ void autoconf_start(void) {
   s_mask = lwip_ntohl(ip4_addr_get_u32(netif_ip4_netmask(n)));
   s_gw = lwip_ntohl(ip4_addr_get_u32(netif_ip4_gw(n)));
   s_dns = dns ? lwip_ntohl(ip4_addr_get_u32(dns)) : 0u;
+  if (s_dns == 0u) {
+    // Some DHCP servers hand out no DNS option. Home routers almost
+    // always proxy DNS themselves, so the gateway is a far better guess
+    // than nothing -- and the log below says which one the ST got.
+    s_dns = s_gw;
+  }
 
   if (s_ourIp == 0u || s_mask == 0u) {
     DPRINTF("autoconf: no lease of our own; leaving the ST to the CPX\n");
