@@ -1,8 +1,8 @@
 {
   "uuid": "<APP_UUID>",
   "name": "MD/Net: Wireless Internet",
-  "description": "Wireless internet on your Atari ST that configures itself. Just install STinG from <a href=\"https://hardware.atari.org/files/sfl.zip\">hardware.atari.org</a>, run INSTALL.TOS from the cartridge on your Desktop, click activate in the control panel and you're ready to go. For more information, see <a href=\"https://neilrackett.com/atarist\">https://neilrackett.com/atarist</a>.",
-  "image": "https://atarist.neilrackett.com/<APP_UUID>.png",
+  "description": "Wireless internet on your Atari ST that configures itself. Just install STinG from <a href=\"https://hardware.atari.org/files/sfl.zip\">hardware.atari.org</a>, run INSTALL.TOS from the cartridge on your Desktop, click activate in the control panel and you're ready to go. For more information, visit <a href=\"https://neilrackett.com/atarist\">neilrackett.com</a>.",
+  "image": "https://downloads.neilrackett.com/md-net/image.webp",
   "tags": [
     "Network"
   ],
@@ -12,7 +12,7 @@
     "MegaST",
     "MegaSTE"
   ],
-  "binary": "https://atarist.neilrackett.com/<APP_UUID>.uf2",
+  "binary": "https://downloads.neilrackett.com/md-net/<APP_UUID>.uf2",
   "md5": "<BINARY_MD5_HASH>",
   "version": "<APP_VERSION>"
 }
