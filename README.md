@@ -15,11 +15,12 @@ An earlier approach emulated the [NetUSBee](https://hardware.atari.org/netusbee/
 > ### ⚠️ Work in progress
 >
 > **MD/Net works.** An Atari ST browses the web over WiFi through a
-> SidecarTridge Multi-device, with no wires and no soldering — CAB
-> loading a site by hostname, on a stock 68000. Everything needed is on
-> the cartridge: open it from the desktop, run `INSTALL.TOS`, and the
-> driver, IP address, netmask, routing and nameserver are all set up
-> for you. Hardware-validated 2026-07-28.
+> SidecarTridge Multi-device, with no wires and no soldering — CAB and
+> [HighWire/LowWire](https://github.com/neilrackett/atarist-highwire/releases)
+> loading sites by hostname, with greyscale images, on a stock 68000.
+> Everything needed is on the cartridge: open it from the desktop, run
+> `INSTALL.TOS`, and the driver, IP address, netmask, routing and
+> nameserver are all set up for you. Hardware-validated 2026-07-28.
 >
 > It gets there with a **custom STinG driver** (`MDNET.STX`, which
 > appears as a port named "WiFi") talking to the cartridge over a
