@@ -83,6 +83,20 @@ Nothing you've configured yourself is overwritten: an address set in
 STinG Port Setup, a `ROUTE.TAB` that already mentions the WiFi port, or
 a nameserver you chose are all left alone.
 
+### 3. Get browsing
+
+Any STinG-compatible software works. For the web, grab
+**[LowWire](https://github.com/neilrackett/atarist-highwire/releases)** —
+a build of the HighWire browser that runs on a stock ST in every
+resolution, with no SpeedoGDOS, NVDI or other dependencies, and
+greyscale images in ST medium. (Its changes have been offered upstream
+as [freemint/highwire#7](https://github.com/freemint/highwire/pull/7);
+if they're merged, prefer official HighWire builds.)
+
+Point it at [frogfind.com](http://frogfind.com) or
+[theoldnet.com](http://theoldnet.com) — both serve the web in a form a
+68000 can enjoy.
+
 ## How it works
 
 MD/Net is not a resident cartridge — it prints its status at boot and
