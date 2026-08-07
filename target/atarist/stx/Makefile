@@ -57,11 +57,29 @@ INSTCART.BIN: instcart.o installpic.o
 	$(CC) $(LDFLAGS) -Wl,--entry,_instcart -o instcart.prg \
 	      instcart.o installpic.o
 	m68k-atari-mint-objcopy -O binary instcart.prg $@
-	@if m68k-atari-mint-objdump -r instcart.prg 2>/dev/null \
-	    | grep -qE "^[0-9a-f]{8} "; then \
-	  echo "ERROR: cartridge installer needs relocation; it cannot be"; \
-	  echo "       copied to RAM and run. Check install.c has no"; \
-	  echo "       writable statics and everything built -mpcrel."; \
+	@# Position-independence gate, in two parts. objdump -r on the LINKED
+	@# a.out-mintprg shows nothing even for absolute code (proven with a
+	@# deliberately non-PIC test build), so a linked-file check is a
+	@# no-op. What does work:
+	@#  1. absolute relocations (type 32) in the OBJECTS -- present the
+	@#     moment -mpcrel is dropped;
+	@#  2. nonzero .data/.bss in the linked image -- present the moment a
+	@#     writable static creeps back (which with -mpcrel emits NO
+	@#     relocation at all, so only a section check can catch it; and
+	@#     objcopy would silently drop the .bss, corrupting the workspace
+	@#     that follows the blob).
+	@if m68k-atari-mint-objdump -r instcart.o installpic.o 2>/dev/null \
+	    | grep -qE "^[0-9a-f]{8} +32"; then \
+	  echo "ERROR: cartridge installer has absolute relocations; it"; \
+	  echo "       cannot be copied to RAM and run. Was -mpcrel dropped?"; \
+	  exit 1; \
+	fi
+	@if m68k-atari-mint-objdump -h instcart.prg 2>/dev/null \
+	    | awk '($$2==".data"||$$2==".bss") && $$3 !~ /^0+$$/ {bad=1} \
+	           END {exit bad}'; \
+	  then :; else \
+	  echo "ERROR: cartridge installer has writable data (.data/.bss)."; \
+	  echo "       All mutable state must live in the WORK struct."; \
 	  exit 1; \
 	fi
 

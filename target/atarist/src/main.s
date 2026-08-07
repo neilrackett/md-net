@@ -101,12 +101,18 @@ get_screen_base		macro
 first:
 	dc.l second
 	dc.l $08000000 + pre_auto		; After GEMDOS init (before booting from disks)
-	dc.l 0
+	dc.l boot_noop					; CA_RUN: the desktop lists every chain
+									; entry and calls this on a double-click,
+									; so it must be a real routine -- zero
+									; here would be a jsr to address 0
 	dc.w GEMDOS_TIME 				;time
 	dc.w GEMDOS_DATE 				;date
 	dc.l end_pre_auto - pre_auto
 	dc.b "MDNET",0
     even
+
+boot_noop:
+	rts								; run at boot only; nothing to do by hand
 
 ; The installer, so there is nothing to copy from another machine: open
 ; the cartridge on the desktop and run it. CA_INIT is zero on purpose --
@@ -225,12 +231,18 @@ install_cart_run:
 	tst.l d0
 	bgt.s .got_malloc
 
-	sub.l #INSTALL_TOTAL,sp				; no Malloc: borrow the stack
+; No Malloc arena on this launch path: borrow the stack instead. Note
+; this takes ~13 KB of headroom below the caller's sp; the argument and
+; return address pushed later sit below a3, so the region itself is
+; never clobbered, and .restore_stack unwinds it exactly.
+	sub.l #INSTALL_TOTAL,sp
 	move.l sp,a3
+	moveq #0,d4							; d4 = 0: nothing to free
 	bra.s .copy_installer
 
 .got_malloc:
 	move.l d0,a3
+	moveq #1,d4							; d4 = 1: block is ours to free
 
 .copy_installer:
 	move.l a3,a2
@@ -254,10 +266,14 @@ install_cart_run:
 ; is neither memory ownership nor anything specific to this installer.
 ; It fires after all the work is finished and nothing afterwards is
 ; affected. Freeing is kept because it is correct and costs nothing.
-	move.l a3,d0
+;
+; Ownership comes from d4, set at allocation time. A first version
+; guessed it from an address comparison against a6, which was wrong on
+; both paths at once: on a stock ST, Malloc returns from the free pool
+; ABOVE the desktop's stack, so the block leaked -- and the borrowed-
+; stack address sat below a6, so it was handed to Mfree instead.
+	tst.w d4
 	beq.s .restore_stack				; stack fallback: nothing to free
-	cmp.l a6,a3							; is it inside our own stack frame?
-	bge.s .restore_stack
 	move.l a3,-(sp)
 	move.w #Mfree,-(sp)
 	trap #1

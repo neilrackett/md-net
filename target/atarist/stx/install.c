@@ -68,6 +68,13 @@ typedef struct {
   char buf[8192];
 } WORK;
 
+/* The assembly on both launch paths reserves space for this struct by
+   hand: INSTALL_WORK_SIZE in target/atarist/src/main.s and the
+   workspace .space in instentry.s, both 8240. Growing WORK past that
+   would silently overrun a Malloc'd block or the BSS; fail the compile
+   instead. */
+typedef char work_fits_reserved_space[(sizeof(WORK) <= 8240) ? 1 : -1];
+
 /* WORK.buf also stages payload writes: the payload lives in cartridge
    ROM, and GEMDOS hands whole-sector writes straight to Rwabs -- a DMA
    transfer on the ST, and the DMA controller can only read DRAM.
@@ -128,7 +135,10 @@ static short write_file(WORK *w, const char *folder, const char *name,
       w->buf[i] = (char)rd8(off + done + i);  /* CPU read, not DMA */
     }
     if (Fwrite((short)fh, (long)chunk, w->buf) != (long)chunk) {
+      /* Remove the partial file: a truncated MDNET.STX left in the
+         STinG folder would be loaded as a driver on the next boot. */
       Fclose((short)fh);
+      Fdelete(path);
       return 0;
     }
     done += chunk;
@@ -494,13 +504,24 @@ void install_main(WORK *w) {
   say("\r\n");
 
   count = rd16(PAYLOAD_OFF + 6);
+  if (count > 10) count = 10; /* mkpayload's directory capacity */
   for (i = 0; i < count; i++) {
     unsigned long e = PAYLOAD_OFF + 8 + ((unsigned long)i * ENT_SIZE);
     char name[ENT_NAME + 1];
     unsigned short n;
     for (n = 0; n < ENT_NAME; n++) name[n] = (char)rd8(e + n);
     name[ENT_NAME] = '\0';
-    if (write_file(w, folder, name, rd32(e + 16), rd32(e + 20))) {
+    unsigned long f_off = rd32(e + 16);
+    unsigned long f_len = rd32(e + 20);
+    if (f_off < PAYLOAD_OFF || f_off + f_len > 0x10000UL) {
+      /* A corrupt directory must not walk the reads out of the ROM4
+         window: past $FAFFFF sits ROM3, where every read is decoded by
+         the cartridge as a command write into the live mailbox. */
+      say("  BAD ENTRY: ");
+      say(name);
+      say("\r\n");
+      failed++;
+    } else if (write_file(w, folder, name, f_off, f_len)) {
       say("  ");
       say(name);
       say("\r\n");

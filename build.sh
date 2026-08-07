@@ -78,6 +78,10 @@ echo "Building target project"
 cd target/atarist
 ./build.sh "$SCRIPT_DIR/target/atarist" release
 cd ../..
+# Remove the staged copy now that it is embedded: a stale one surviving
+# here could be silently baked in by a direct target/atarist build later
+# (this repo has been bitten by stale artifacts before).
+rm -f target/atarist/src/INSTCART.BIN
 echo "Done building target project"
 
 # Build the rp project in the RP architecture
