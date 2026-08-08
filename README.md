@@ -69,7 +69,15 @@ You'll know it's working because you'll see `MD/Net: connecting...` followed by 
 
 ### 2. The ST
 
-You need [STinG](https://hardware.atari.org/files/sfl.zip) installed first.
+You need STinG installed first. The easy way: grab
+**`sting-for-mdnet.zip`** from the releases page and copy its contents
+onto your boot drive — it's the standard STinG distribution, rearranged
+so that's the whole install, with one fix (the stock `ROUTE.TAB`'s
+placeholder routes would block internet access, so it's removed and
+`INSTALL.TOS` writes a correct one instead). Or install
+[stock STinG](https://hardware.atari.org/files/sfl.zip) yourself — but
+then delete `C:\STING\ROUTE.TAB` before running the installer, for the
+same reason.
 
 Copy **`INSTALL.TOS`** to your ST and run it. That's all: it takes the
 driver and its notes out of the cartridge, writes them into your `STING`
