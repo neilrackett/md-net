@@ -26,6 +26,10 @@ Run INSTALL.TOS. It copies MDNET.STX and this file into your STING
 folder, sets up ROUTE.TAB for you, deactivates any EtherNEC driver it
 finds (ENEC.STX becomes ENEC.ST_), and tells you what it did.
 
+After a reboot the WiFi port turns itself on -- there is nothing to
+configure in STinG Port Setup unless you want to change something. To
+keep the port switched off instead, rename MDNET.STX to MDNET.ST_.
+
 It also sets NAMESERVER in DEFAULT.CFG, so web addresses and other
 host names work, not just numeric IP addresses.
 

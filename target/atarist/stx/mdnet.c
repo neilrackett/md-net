@@ -613,9 +613,21 @@ static void cdecl my_send(PORT *port) {
   }
 }
 
+static uint16 routes_checked = FALSE;
+
 static void cdecl my_receive(PORT *port) {
   int16 budget;
   if (port != &my_port || my_port.active == 0) return;
+  if (!routes_checked) {
+    /* Self-activation happens while STinG is still loading modules, and
+       the kernel rebuilds its routing table from ROUTE.TAB right after
+       -- discarding anything installed that early. By the first
+       serviced slice the kernel is fully up, so make sure the port is
+       routed; install_routes does nothing if ROUTE.TAB already provided
+       them, which the installer arranges. */
+    routes_checked = TRUE;
+    install_routes(mb_r32(MB_CFG_GW_OFF));
+  }
   /* Consume up to a few frames per slice: after the ack the RP
      publishes the next queued frame within ~1 ms, so a short second
      look often pays off; the budget bounds our time in STinG's slice. */
@@ -776,6 +788,22 @@ void cdecl driver_main(BASPAG *bp) {
        in it on a machine that has never been configured. Routes wait
        until activation (see adopt_config). */
     adopt_config(FALSE);
+    /* Turn the port on ourselves, so a fresh machine needs no visit to
+       STinG Port Setup at all. Only when the cartridge has actually
+       chosen an address: without one the port would be active but
+       unconfigured, which helps nobody. Sequencing, for the record:
+       the cartridge boot stub blocks until the firmware is up, so the
+       config is already published when STinG loads this module; a
+       user's saved settings are applied by the control panel later in
+       the boot and still override; and if WiFi failed, the mailbox
+       magic is never published and this code is never reached. Routes
+       installed during this activation are wiped moments later when
+       STinG loads ROUTE.TAB -- my_receive re-checks them once the
+       kernel is fully up (see routes_checked). To keep the port off
+       permanently, disable the driver (MDNET.STX -> MDNET.ST_). */
+    if (mb_r32(MB_CFG_IP_OFF) != 0) {
+      on_port("WiFi");
+    }
     Ptermres(PgmSize, 0);
   }
 

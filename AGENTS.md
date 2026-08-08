@@ -42,7 +42,16 @@ STinG Port Setup opens pre-filled with an ARP-probed address, ping 0%
 loss both ways; the user still ticks Active once). **v0.4.0** — the
 installer ships on the cartridge itself and the web works: CAB loaded
 frogfind.com by hostname over WiFi on a stock ST (done,
-hardware-validated 2026-07-28).
+hardware-validated 2026-07-28). Since then: the driver
+**self-activates** at load when the cartridge has chosen an address
+(built, **not yet hardware-validated**) — `driver_main` calls
+`on_port("WiFi")` during `load_stx()`, which is safe because the boot
+stub blocks until the config is published, a WiFi failure means the
+mailbox magic is absent so the driver never installs at all, and a
+user's saved control-panel settings are applied later in the boot and
+still win. Routes installed that early are wiped when the kernel loads
+`ROUTE.TAB` moments later, so `my_receive` re-checks them once on its
+first serviced slice.
 
 The minor version bumps per milestone; **every `make debug` auto-bumps
 the patch** so each flashed image is identifiable. **Tagging a
