@@ -227,6 +227,8 @@ static char *suppHardware[] = {"No selection", "WiFi (MD/Net)", NULL};
 
 static uint8 my_mac[6];
 static uint16 last_rx_seq = 0;
+static uint32 adopted_gw = 0;     /* gateway from the last seq-stable read */
+static uint32 last_routed_ip = 0; /* address install_routes last ran for */
 
 /* Outgoing ARP packet (static, reused). */
 static struct {
@@ -475,19 +477,30 @@ static void install_routes(uint32 gateway) {
   uint32 tmplt, mask, gway;
   PORT *port;
   int16 i;
+  int16 have_subnet = FALSE, have_default = FALSE;
 
   if (my_port.ip_addr == 0 || my_port.ip_addr == 0xffffffffUL) return;
 
+  /* Look for routes matching the address the port holds NOW. Checking
+     merely that some route referenced the port was not enough: routes
+     installed while the port held one address went stale if the
+     control panel applied a different saved address later, leaving the
+     port active but unrouted. Appending a correct route fixes that
+     without touching entries the user wrote -- different subnets match
+     different destinations, so an added route cannot shadow theirs. */
   for (i = 0; get_route_entry(i, &tmplt, &mask, &port, &gway) != -1; i++) {
-    if (port == &my_port) return; /* already routed; leave it alone */
+    if (port != &my_port) continue;
+    if (tmplt == (my_port.ip_addr & my_port.sub_mask) &&
+        mask == my_port.sub_mask)
+      have_subnet = TRUE;
+    if (tmplt == 0 && mask == 0) have_default = TRUE;
   }
 
-  /* Our own subnet, then everything else via the gateway. */
-  set_route_entry(-1, my_port.ip_addr & my_port.sub_mask, my_port.sub_mask,
-                  &my_port, 0);
-  if (gateway != 0) {
+  if (!have_subnet)
+    set_route_entry(-1, my_port.ip_addr & my_port.sub_mask, my_port.sub_mask,
+                    &my_port, 0);
+  if (!have_default && gateway != 0)
     set_route_entry(-1, 0, 0, &my_port, gateway);
-  }
 }
 
 /* Take the address the cartridge chose for us.
@@ -524,6 +537,7 @@ static void adopt_config(int16 with_routes) {
     my_port.sub_mask = cfg_mask;
   }
 
+  adopted_gw = cfg_gw; /* the seq-stable value; raw re-reads can tear */
   if (with_routes) install_routes(cfg_gw);
 }
 
@@ -613,20 +627,22 @@ static void cdecl my_send(PORT *port) {
   }
 }
 
-static uint16 routes_checked = FALSE;
 
 static void cdecl my_receive(PORT *port) {
   int16 budget;
   if (port != &my_port || my_port.active == 0) return;
-  if (!routes_checked) {
-    /* Self-activation happens while STinG is still loading modules, and
-       the kernel rebuilds its routing table from ROUTE.TAB right after
-       -- discarding anything installed that early. By the first
-       serviced slice the kernel is fully up, so make sure the port is
-       routed; install_routes does nothing if ROUTE.TAB already provided
-       them, which the installer arranges. */
-    routes_checked = TRUE;
-    install_routes(mb_r32(MB_CFG_GW_OFF));
+  if (my_port.ip_addr != last_routed_ip && my_port.ip_addr != 0 &&
+      my_port.ip_addr != 0xffffffffUL) {
+    /* Keep the routes matching whatever address the port holds. This
+       covers two orderings a one-shot check missed: routes installed
+       during self-activation are discarded when the kernel rebuilds
+       its table from ROUTE.TAB (only when that file exists -- a
+       missing file leaves the table alone), and the control panel may
+       apply the user's saved address after boot, stranding routes for
+       an address the port no longer has. install_routes appends only,
+       and only what is missing. */
+    last_routed_ip = my_port.ip_addr;
+    install_routes(adopted_gw);
   }
   /* Consume up to a few frames per slice: after the ack the RP
      publishes the next queued frame within ~1 ms, so a short second
@@ -789,20 +805,28 @@ void cdecl driver_main(BASPAG *bp) {
        until activation (see adopt_config). */
     adopt_config(FALSE);
     /* Turn the port on ourselves, so a fresh machine needs no visit to
-       STinG Port Setup at all. Only when the cartridge has actually
-       chosen an address: without one the port would be active but
+       STinG Port Setup at all -- only when the cartridge has actually
+       chosen an address; without one the port would be active but
        unconfigured, which helps nobody. Sequencing, for the record:
        the cartridge boot stub blocks until the firmware is up, so the
-       config is already published when STinG loads this module; a
-       user's saved settings are applied by the control panel later in
-       the boot and still override; and if WiFi failed, the mailbox
-       magic is never published and this code is never reached. Routes
-       installed during this activation are wiped moments later when
-       STinG loads ROUTE.TAB -- my_receive re-checks them once the
-       kernel is fully up (see routes_checked). To keep the port off
-       permanently, disable the driver (MDNET.STX -> MDNET.ST_). */
-    if (mb_r32(MB_CFG_IP_OFF) != 0) {
-      on_port("WiFi");
+       config is published before STinG loads this module; a user's
+       saved settings still win -- STinG Port Setup's boot pass applies
+       them after us, including calling off_port for a saved ACTIVE=0;
+       and if WiFi failed, the mailbox magic is never published and
+       this code is never reached. Routes are kept fresh from
+       my_receive (see last_routed_ip), which also covers the kernel
+       rebuilding its table from ROUTE.TAB right after module load. */
+    if (my_port.ip_addr != 0 && my_port.ip_addr != 0xffffffffUL) {
+      /* Decided from what adopt_config just took via its seq-stable
+         read -- a raw mailbox re-read here could tear mid-publish.
+         Activation goes through our own driver struct rather than
+         on_port("WiFi"): the kernel's name lookup takes the first
+         match, so a name collision would activate someone else's
+         port. This is exactly what on_port does for an inactive port,
+         minus zeroing stats that are already zero. */
+      if (my_set_state(&my_port, TRUE)) {
+        my_port.active = TRUE;
+      }
     }
     Ptermres(PgmSize, 0);
   }

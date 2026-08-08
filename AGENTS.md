@@ -44,14 +44,23 @@ installer ships on the cartridge itself and the web works: CAB loaded
 frogfind.com by hostname over WiFi on a stock ST (done,
 hardware-validated 2026-07-28). Since then: the driver
 **self-activates** at load when the cartridge has chosen an address
-(built, **not yet hardware-validated**) — `driver_main` calls
-`on_port("WiFi")` during `load_stx()`, which is safe because the boot
-stub blocks until the config is published, a WiFi failure means the
-mailbox magic is absent so the driver never installs at all, and a
-user's saved control-panel settings are applied later in the boot and
-still win. Routes installed that early are wiped when the kernel loads
-`ROUTE.TAB` moments later, so `my_receive` re-checks them once on its
-first serviced slice.
+(built, **not yet hardware-validated**) — `driver_main` activates its
+own port during `load_stx()` (directly via `my_set_state`, not
+`on_port`, so a port-name collision cannot redirect it), gated on the
+seq-stably adopted address. Safe because the boot stub blocks until the
+config is published, a WiFi failure means the mailbox magic is absent
+so the driver never installs at all, and a user's saved control-panel
+settings are applied later in the boot and still win — including a
+saved ACTIVE=0, which STinG Port Setup's boot pass enforces with
+`off_port` (verified in its source, `config/ports/stngport.c`). Routes
+follow the port's address from `my_receive` (append-only, never
+touching user entries): that covers both the kernel rebuilding its
+table from `ROUTE.TAB` after module load — note it only rebuilds when
+the file EXISTS; when missing, `routing_table()` returns `E_NODATA`
+without touching the table (verified in `sting/ip.c`) — and the control
+panel applying a different saved address after boot. The first serviced
+slice is provably after the rebuild: the 200 Hz handler gates on
+`active`, which `set_sysvars` sets only after `routing_table()`.
 
 The minor version bumps per milestone; **every `make debug` auto-bumps
 the patch** so each flashed image is identifiable. **Tagging a
