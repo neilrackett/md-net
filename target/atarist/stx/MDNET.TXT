@@ -71,6 +71,11 @@ A. The driver could not see the MD/Net firmware. Make sure the
    MD/Net firmware is installed, you see the boot message and
    do a full power-cycle rather than reset after installing.
 
+Q. Why do two bombs appear when the installer finishes?
+A. A quirk of running programs from the cartridge -- it happens after
+   everything is written, nothing is harmed, and the install is
+   complete.
+
 Q. Why doesn't The WiFi port appear in the STinG control panel?
 A. You need to copy MDNET.STX to your STING folder and restart your ST.
 

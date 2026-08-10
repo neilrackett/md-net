@@ -12,43 +12,6 @@ Networking on the ST is provided by **[STinG](https://github.com/th-otto/STinG)*
 
 An earlier approach emulated the [NetUSBee](https://hardware.atari.org/netusbee/netus.htm)'s NE2000 Ethernet controller so that stock drivers would work unmodified. That got as far as a working transmit path and byte-exact receive, but the remote-DMA data port proved too timing-critical to serve reliably from the cartridge bus. It is preserved and documented on the `netusbee` branch. Supporting MiNTNet / MagiCNet is a possible future direction.
 
-> ### ⚠️ Work in progress
->
-> **MD/Net works.** An Atari ST browses the web over WiFi through a
-> SidecarTridge Multi-device, with no wires and no soldering — CAB and
-> [HighWire/LowWire](https://github.com/neilrackett/atarist-highwire/releases)
-> loading sites by hostname, with greyscale images, on a stock 68000.
-> Everything needed is on the cartridge: open it from the desktop, run
-> `INSTALL.TOS`, and the driver, IP address, netmask, routing and
-> nameserver are all set up for you. Hardware-validated 2026-07-28.
->
-> It gets there with a **custom STinG driver** (`MDNET.STX`, which
-> appears as a port named "WiFi") talking to the cartridge over a
-> purpose-built mailbox protocol — not by emulating a NetUSBee. The
-> NE2000-emulation approach is preserved, documented, and paused on the
-> `netusbee` branch; see [docs/mailbox-protocol.md](docs/mailbox-protocol.md)
-> for the design that replaced it and why.
->
-> **What works today:**
-> - WiFi bootstrap: the ST prints `MD/Net connected: <its own IP>` at
->   boot, then continues to GEM.
-> - `INSTALL.TOS` installs the driver straight from the cartridge, so
->   the driver always matches the firmware running on it.
-> - The cartridge picks a free address for the ST out of its own subnet
->   (checked by ARP probing), and the driver adopts it and installs the
->   matching routes. `ROUTE.TAB` and `NAMESERVER` are written for you.
->   Anything you set yourself always wins.
-> - ARP, IP and ICMP in both directions at 0% loss.
->
-> **Known limits:**
-> - Throughput is capped at about **20 frames per second each way**.
->   STinG services the driver roughly every 50 ms and the driver hands
->   over one frame per service, which also puts round-trip times at
->   ~60–210 ms. Lifting that is the next piece of work; until then,
->   expect transfers to feel slow.
-> - TCP applications (FTP, web browsing) are not yet exercised.
-> - MiNTNet / MagiCNet are not supported — STinG only.
-
 ## Hardware requirements
 
 - [SidecarTridge Multi-device](https://sidecartridge.com) with a **Raspberry Pi Pico W** (WiFi is required)
@@ -170,6 +133,25 @@ doesn't supply one.
 
 To choose the ST's address yourself, set it in STinG Port Setup; an
 address set by hand always wins.
+
+## What to expect
+
+- **It's an 8 MHz machine from 1985.** Interactive use — ping, small
+  pages, gapFTP — feels fine. Bulk transfers run at roughly 2 KB/s:
+  the cartridge bridge itself moves ~21 KB/s each way, but STinG's TCP
+  sends small segments one at a time, and that, not the WiFi, sets the
+  pace. Round trips are ~60–210 ms.
+- **STinG only** for now — MiNTNet / MagiCNet are not supported.
+- **Two bombs appear when `INSTALL.TOS` returns to the desktop.** This
+  is a quirk of running programs from a cartridge on the ST — it
+  happens after all the work is finished, nothing is harmed, and the
+  install is complete. (MD/JS's cartridge programs do exactly the
+  same.)
+- Browsers: [LowWire](https://github.com/neilrackett/atarist-highwire/releases)
+  works on every ST in every resolution; CAB works too if you have it.
+  Stick to sites built for vintage machines —
+  [frogfind.com](http://frogfind.com) and
+  [theoldnet.com](http://theoldnet.com) are made for exactly this.
 
 ## Building
 
