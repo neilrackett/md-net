@@ -1,20 +1,24 @@
 # MD/Net: Ethernet over WiFi for Atari ST
 
+![An Atari ST browsing frogfind.com in colour with the LowWire browser, through a SidecarTridge Multi-device plugged into its cartridge port](docs/frogfind.jpg)
+
 Microfirmware for the [SidecarTridge Multi-device](https://sidecartridge.com) by [Neil Rackett](https://neilrackett/atarist)
 
 ## Introduction
 
-Welcome to MD/Net: Wireless Internet for your Atari ST!
+Welcome to MD/Net: Atari ST WiFi that just works!
 
 MD/Net turns your SidecarT into a wireless network adapter for your Atari ST, bridging the cartridge port to your WiFi network. It reuses the WiFi credentials you already gave your SidecarT, so there is nothing extra to configure — no wires, no soldering.
 
 Networking on the ST is provided by **[STinG](https://github.com/th-otto/STinG)** under plain TOS, driven by MD/Net's own port driver, `MDNET.STX`, which appears in STinG as a port named "WiFi". The driver and the cartridge talk over a small purpose-built protocol described in [docs/mailbox-protocol.md](docs/mailbox-protocol.md).
 
-An earlier approach emulated the [NetUSBee](https://hardware.atari.org/netusbee/netus.htm)'s NE2000 Ethernet controller so that stock drivers would work unmodified. That got as far as a working transmit path and byte-exact receive, but the remote-DMA data port proved too timing-critical to serve reliably from the cartridge bus. It is preserved and documented on the `netusbee` branch. Supporting MiNTNet / MagiCNet is a possible future direction.
+An earlier approach emulated the [NetUSBee](https://hardware.atari.org/netusbee/netus.htm)'s NE2000 Ethernet controller so that stock drivers would work unmodified. That got as far as a working transmit path and byte-exact receive, but the remote-DMA data port proved too timing-critical to serve reliably from the cartridge bus. It is preserved and documented on the `netusbee` branch.
+
+Supporting MiNTNet / MagiCNet is a possible future direction.
 
 ## Hardware requirements
 
-- [SidecarTridge Multi-device](https://sidecartridge.com) (they all ship with the WiFi-capable Pico W)
+- [SidecarTridge Multi-device](https://sidecartridge.com) (it comes with a WiFi-capable Pico W)
 - Atari ST, STE, MegaST, or MegaSTE
 - Raspberry Pi Debug Probe or Picoprobe for flashing/debugging (optional but recommended for development)
 
