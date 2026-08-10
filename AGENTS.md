@@ -42,9 +42,12 @@ STinG Port Setup opens pre-filled with an ARP-probed address, ping 0%
 loss both ways; the user still ticks Active once). **v0.4.0** — the
 installer ships on the cartridge itself and the web works: CAB loaded
 frogfind.com by hostname over WiFi on a stock ST (done,
-hardware-validated 2026-07-28). Since then: the driver
-**self-activates** at load when the cartridge has chosen an address
-(built, **not yet hardware-validated**) — `driver_main` activates its
+hardware-validated 2026-07-28). **v0.5.0** — true zero-config: the
+port activates itself, the installer ships next to a ready-to-go STinG
+bundle, and a fresh machine goes bundle → installer → reboot → browsing
+with no configuration touched at all (done, hardware-validated
+2026-08-10, twice, from a clean setup). The self-activation mechanics:
+`driver_main` activates its
 own port during `load_stx()` (directly via `my_set_state`, not
 `on_port`, so a port-name collision cannot redirect it), gated on the
 seq-stably adopted address. Safe because the boot stub blocks until the

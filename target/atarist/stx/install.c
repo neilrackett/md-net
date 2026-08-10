@@ -538,10 +538,9 @@ void install_main(WORK *w) {
     disable_enec(w, folder);
     write_routes(w, folder);
     write_nameserver(w, folder);
-    say("\r\nDone. Now:\r\n");
-    say("1. Reboot your ST.\r\n");
-    say("2. Open STinG Port Setup and set\r\n");
-    say("   up the port named \"WiFi\".\r\n");
+    say("\r\nDone. Reboot your ST and you're\r\n");
+    say("online -- the WiFi port switches\r\n");
+    say("itself on.\r\n");
     say("\r\nSee MDNET.TXT for the details.\r\n");
   } else if (failed) {
     say("\r\nInstall failed. Is the disk\r\n");
