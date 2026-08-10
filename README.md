@@ -1,12 +1,10 @@
-# MD/Net: Ethernet over WiFi for Atari ST
+# MD/Net: Atari ST WiFi that just works!
 
 ![An Atari ST browsing frogfind.com in colour with the LowWire browser, through a SidecarTridge Multi-device plugged into its cartridge port](docs/frogfind.jpg)
 
 Microfirmware for the [SidecarTridge Multi-device](https://sidecartridge.com) by [Neil Rackett](https://neilrackett/atarist)
 
 ## Introduction
-
-Welcome to MD/Net: Atari ST WiFi that just works!
 
 MD/Net turns your SidecarT into a wireless network adapter for your Atari ST, bridging the cartridge port to your WiFi network. It reuses the WiFi credentials you already gave your SidecarT, so there is nothing extra to configure — no wires, no soldering.
 
