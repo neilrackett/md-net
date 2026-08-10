@@ -14,7 +14,7 @@ An earlier approach emulated the [NetUSBee](https://hardware.atari.org/netusbee/
 
 ## Hardware requirements
 
-- [SidecarTridge Multi-device](https://sidecartridge.com) with a **Raspberry Pi Pico W** (WiFi is required)
+- [SidecarTridge Multi-device](https://sidecartridge.com) (they all ship with the WiFi-capable Pico W)
 - Atari ST, STE, MegaST, or MegaSTE
 - Raspberry Pi Debug Probe or Picoprobe for flashing/debugging (optional but recommended for development)
 
