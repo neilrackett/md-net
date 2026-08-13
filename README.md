@@ -1,6 +1,6 @@
 # MD/Net: Atari ST WiFi that just works!
 
-![An Atari ST browsing frogfind.com in colour with the LowWire browser, through a SidecarTridge Multi-device plugged into its cartridge port](docs/frogfind.jpg)
+<img src="docs/mdnet.jpg" alt="MD/Net: Atari ST WiFi that just works!" width="640" />
 
 Microfirmware for the [SidecarTridge Multi-device](https://sidecartridge.com) by [Neil Rackett](https://neilrackett/atarist)
 
@@ -58,6 +58,8 @@ STinG Port Setup, a `ROUTE.TAB` that already mentions the WiFi port, or
 a nameserver you chose are all left alone.
 
 ### 3. Get browsing
+
+<img alt="An Atari ST browsing frogfind.com in colour with the LowWire browser, through a SidecarTridge Multi-device plugged into its cartridge port" src="docs/frogfind.jpg" width="640" />
 
 Any STinG-compatible software works. For the web, grab
 **[LowWire](https://github.com/neilrackett/atarist-highwire/releases)** —
