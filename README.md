@@ -25,7 +25,7 @@ Supporting MiNTNet / MagiCNet is a possible future direction.
 ### 1. The cartridge
 
 1. Download the latest files from the [releases page](https://github.com/neilrackett/md-net/releases).
-2. Copy the `.uf2` and `.json` files to the `/apps` folder of your SidecarT's microSD card.
+2. Copy the `.uf2` and `.json` files to the `/apps` folder of your SidecarT's microSD card, keeping their names as they are — the two filenames must match for the app to appear in the menu.
 3. In the Booster web interface, make sure you're connected to your WiFi, so MD/Net can use the same information to connect.
 4. On the Booster screen, press ESC for the app list and select the MD/Net app.
 5. To return to Booster, turn on your ST while holding the SELECT button on your SidecarT.

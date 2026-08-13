@@ -157,6 +157,16 @@ Requirements: ARM GNU toolchain (`PICO_TOOLCHAIN_PATH`),
 must be running** — and the pinned submodules (pico-sdk 2.2.0 etc.,
 re-pinned by the build).
 
+### Releasing
+
+The build names the firmware `<uuid>-<version>.uf2` (deliberately — the
+version in the filename is how a flashed image is identified) but the
+descriptor is always `<uuid>.json`. **The SidecarT only lists an app
+when the two filenames match**, so the UF2 must be renamed to plain
+`<uuid>.uf2` when it is attached to a release or copied to `/apps`.
+Upload the build output unrenamed and the app simply never appears in
+the menu, with nothing to say why.
+
 ### ⚠️ Build-system lessons (learned the hard way)
 
 - **`build.sh` has `set -e` — keep it.** It once didn't: a compile error
