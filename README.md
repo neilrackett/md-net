@@ -44,14 +44,18 @@ placeholder routes would block internet access, so it's removed and
 then delete `C:\STING\ROUTE.TAB` before running the installer, for the
 same reason.
 
-Copy **`INSTALL.TOS`** to your ST and run it. That's all: it takes the
-driver and its notes out of the cartridge, writes them into your `STING`
-folder, sets up `ROUTE.TAB` and `NAMESERVER`, and deactivates any
-EtherNEC driver it finds. Reboot, and the "WiFi" port is ready.
+Then open the **MD/Net cartridge icon** on the GEM desktop and run
+**`INSTALL.TOS`** from inside it. There's nothing to copy from another
+machine — the installer, the driver and its notes all ship on the
+cartridge, so the driver always matches the firmware you're running.
 
-Because the driver comes from the cartridge rather than alongside the
-installer, it always matches the firmware you're running — there's no
-way to end up with a mismatched pair.
+It writes the driver into your `STING` folder, sets up `ROUTE.TAB` and
+`NAMESERVER`, and deactivates any EtherNEC driver it finds. (Two bombs
+appear as it returns to the desktop; that's an ST cartridge quirk, it
+happens after everything is written, and nothing is harmed.)
+
+Reboot, and you're online — the "WiFi" port switches itself on, so
+there's nothing to configure in STinG Port Setup.
 
 Nothing you've configured yourself is overwritten: an address set in
 STinG Port Setup, a `ROUTE.TAB` that already mentions the WiFi port, or
