@@ -148,7 +148,20 @@ static int32 xbios_supexec(long (*fn)(void)) {
 #define MB_RX_SEQ_OFF 0x4044UL
 #define MB_RX_LEN_OFF 0x4046UL
 #define MB_TX_ACK_OFF 0x4048UL
+#define MB_RX_CREDITS_OFF 0x404AUL
+#define MB_CAPS_OFF 0x404CUL
+#define MB_RXR_SEQ_OFF 0x404EUL
+#define MB_RXR_LEN_OFF 0x4050UL
 #define MB_RX_BUF_OFF 0x5000UL
+#define MB_RXR_BUF_OFF 0xC000UL
+
+/* RX ring: with MB_CAP_RX_RING the cartridge keeps up to MB_RXR_SLOTS
+   frames published at once, frame s in slot s % MB_RXR_SLOTS, and we
+   ack cumulatively. Without it (older firmware) it is the single
+   window at MB_RX_BUF_OFF, one frame per ack, exactly as before. */
+#define MB_CAP_RX_RING 0x0001
+#define MB_RXR_SLOTS 8
+#define MB_RXR_STRIDE 2048UL
 
 #define MB_PROTO_MAGIC 0x4D444E42UL /* 'MDNB' */
 #define MB_PROTO_VERSION 1
@@ -161,7 +174,28 @@ static int32 xbios_supexec(long (*fn)(void)) {
 #define MBC_DRIVER_HELLO 0x06
 #define MBC_DRIVER_BYE 0x07
 
-#define DRIVER_VERSION_BYTE 1
+/* Sent with MBC_DRIVER_HELLO. 2 tells the cartridge we read the ring;
+   an older cartridge just logs it and serves the single window. */
+#define DRIVER_VERSION_BYTE 2
+
+/* STinG services ports once per timeslice, and one slice moved one
+   frame each way, so the slice length was the whole throughput
+   ceiling. Keep the slice at the shortest STinG's own configuration
+   allows (THREADING = 10, every other tick of the 200 Hz timer) while
+   the port is active, and put back whatever was set when it goes
+   inactive. The unit is 5 ms ticks; STinG accepts 2..199. It has to
+   be re-applied from my_receive rather than set once at activation:
+   STinG's loader calls set_sysvars(1, THREADING/5) after loading its
+   modules (sting/install.c), and STinG Port Setup's boot pass applies
+   its saved value too, so anything set during driver_main is undone
+   before the first slice runs. */
+#define MDNET_THREAD_FRACTION 2
+
+/* Work per service call. Both run in STinG's timer context, so they
+   are bounded to give the foreground its CPU back: about 4 us per TX
+   byte and 1 ms per received frame, so a slice tops out near 15 ms. */
+#define RX_BUDGET_FRAMES 4
+#define TX_BUDGET_BYTES 3100
 
 #define mb_r8(off) (*(volatile uint8 *)(ROM4_BASE + (off)))
 #define mb_r16(off) (*(volatile uint16 *)(ROM4_BASE + (off)))
@@ -220,13 +254,19 @@ static PORT my_port = {
     0,      NULL,      NULL};
 
 static DRIVER my_driver = {
-    my_set_state, my_cntrl, my_send, my_receive, "MD/Net WiFi", "01.00",
-    ((2026 - 1980) << 9) | (7 << 5) | 23, "Neil Rackett", NULL, NULL};
+    my_set_state, my_cntrl, my_send, my_receive, "MD/Net WiFi", "01.10",
+    ((2026 - 1980) << 9) | (9 << 5) | 10, "Neil Rackett", NULL, NULL};
 
 static char *suppHardware[] = {"No selection", "WiFi (MD/Net)", NULL};
 
 static uint8 my_mac[6];
-static uint16 last_rx_seq = 0;
+static uint16 last_rx_seq = 0;    /* single window: last sequence seen */
+static uint16 ring_mode = FALSE;  /* cartridge offers the RX ring */
+static uint16 rxr_consumed = 0;   /* ring: last sequence consumed */
+static uint16 win_seq_at_hello = 0; /* ring: MB_RX_SEQ when we said hello */
+static int16 idle_with_credits = 0; /* ring: slices with nothing new but
+                                        frames waiting on the cartridge */
+static int16 saved_fraction = -1; /* STinG thread rate before we lowered it */
 static uint32 adopted_gw = 0;     /* gateway from the last seq-stable read */
 static uint32 last_routed_ip = 0; /* address install_routes last ran for */
 
@@ -254,6 +294,34 @@ static void memcpN(uint8 *d, const uint8 *s, int16 n) {
 static void memsetN(uint8 *d, uint8 v, int16 n) {
   while (--n >= 0) *d++ = v;
 }
+
+/* Copy out of the cartridge window. Long moves when both ends are even
+   (the window always is; KRmalloc blocks are too), bytes otherwise --
+   a 68000 faults on an odd long access. Four times faster than the
+   byte loop for a full frame, which matters once frames are no longer
+   rationed to one per timeslice. */
+static void copy_from_cart(uint8 *d, const volatile uint8 *s, int16 n) {
+  if ((((uint32)d | (uint32)s) & 1) == 0) {
+    uint32 *dl = (uint32 *)d;
+    const volatile uint32 *sl = (const volatile uint32 *)s;
+    while (n >= 16) {
+      dl[0] = sl[0];
+      dl[1] = sl[1];
+      dl[2] = sl[2];
+      dl[3] = sl[3];
+      dl += 4;
+      sl += 4;
+      n -= 16;
+    }
+    while (n >= 4) {
+      *dl++ = *sl++;
+      n -= 4;
+    }
+    d = (uint8 *)dl;
+    s = (const volatile uint8 *)sl;
+  }
+  while (--n >= 0) *d++ = *s++;
+}
 static int16 str_eq(const char *s, const char *t) {
   for (; *s == *t; s++, t++)
     if (*s == '\0') return TRUE;
@@ -264,21 +332,66 @@ static int16 str_eq(const char *s, const char *t) {
 
 static uint16 tx_seq = 0;
 
+/* One dummy read per payload byte on the MBC_TX_DATA channel. This is
+   the whole cost of sending, so keep the loop tight: the channel base
+   is fixed and only the data byte moves, doubled into A1-A8. */
+#define TX_DATA_BASE \
+  ((volatile uint8 *)(ROM3_BASE + ((uint32)MBC_TX_DATA << 9)))
+
+static void mb_tx_bytes(const uint8 *p, int16 n) {
+  volatile uint8 *base = TX_DATA_BASE;
+  int16 quads = n >> 2;
+  int16 rest = n & 3;
+  /* gcc spends half of each byte on 32-bit masking and address adds;
+     the 68000 does it in four instructions. d0 is cleared every time
+     because the doubled index can leave its upper byte set. */
+  if (quads > 0) {
+    __asm__ volatile(
+        "subq.w #1,%2\n"
+        "1:\n\t"
+        "moveq  #0,%%d0\n\t"
+        "move.b (%0)+,%%d0\n\t"
+        "add.w  %%d0,%%d0\n\t"
+        "tst.b  (%1,%%d0.w)\n\t"
+        "moveq  #0,%%d0\n\t"
+        "move.b (%0)+,%%d0\n\t"
+        "add.w  %%d0,%%d0\n\t"
+        "tst.b  (%1,%%d0.w)\n\t"
+        "moveq  #0,%%d0\n\t"
+        "move.b (%0)+,%%d0\n\t"
+        "add.w  %%d0,%%d0\n\t"
+        "tst.b  (%1,%%d0.w)\n\t"
+        "moveq  #0,%%d0\n\t"
+        "move.b (%0)+,%%d0\n\t"
+        "add.w  %%d0,%%d0\n\t"
+        "tst.b  (%1,%%d0.w)\n\t"
+        "dbra   %2,1b"
+        : "+a"(p), "+a"(base), "+d"(quads)
+        :
+        : "d0", "cc", "memory");
+  }
+  while (--rest >= 0) (void)base[(uint16)*p++ << 1];
+}
+
+static void mb_tx_zeros(int16 n) {
+  volatile uint8 *base = TX_DATA_BASE;
+  while (--n >= 0) (void)*base;
+}
+
 /* Send hdr[0..hlen) followed by body[0..blen); pads to 60 bytes min. */
 static int16 mb_tx_frame(const uint8 *hdr, int16 hlen, const uint8 *body,
                          int16 blen) {
   int16 total = hlen + blen;
   int16 pad = 0;
-  int16 i;
   if (total < 60) {
     pad = 60 - total;
     total = 60;
   }
   mb_cmd(MBC_TX_START, (uint16)(total & 0xFF));
   mb_cmd(MBC_TX_LEN_HI, (uint16)((total >> 8) & 0xFF));
-  for (i = 0; i < hlen; i++) mb_cmd(MBC_TX_DATA, hdr[i]);
-  for (i = 0; i < blen; i++) mb_cmd(MBC_TX_DATA, body[i]);
-  for (i = 0; i < pad; i++) mb_cmd(MBC_TX_DATA, 0);
+  mb_tx_bytes(hdr, hlen);
+  mb_tx_bytes(body, blen);
+  mb_tx_zeros(pad);
   tx_seq++;
   mb_cmd(MBC_TX_COMMIT, (uint16)(tx_seq & 0xFF));
   return 0;
@@ -403,7 +516,7 @@ static void deliver_ip_dgram(const volatile uint8 *frame, int16 flen) {
   dgram = KRmalloc(sizeof(IP_DGRAM));
   if (dgram == NULL) return;
 
-  memcpN((uint8 *)&dgram->hdr, (const uint8 *)ip, sizeof(IP_HDR));
+  copy_from_cart((uint8 *)&dgram->hdr, ip, sizeof(IP_HDR));
   dgram->options = NULL;
   dgram->opt_length = opt_len;
   if (opt_len > 0) {
@@ -412,8 +525,7 @@ static void deliver_ip_dgram(const volatile uint8 *frame, int16 flen) {
       KRfree(dgram);
       return;
     }
-    memcpN((uint8 *)dgram->options, (const uint8 *)(ip + sizeof(IP_HDR)),
-           opt_len);
+    copy_from_cart((uint8 *)dgram->options, ip + sizeof(IP_HDR), opt_len);
   }
   dgram->pkt_data = NULL;
   dgram->pkt_length = data_len;
@@ -424,7 +536,7 @@ static void deliver_ip_dgram(const volatile uint8 *frame, int16 flen) {
       KRfree(dgram);
       return;
     }
-    memcpN((uint8 *)dgram->pkt_data, (const uint8 *)(ip + hd_len), data_len);
+    copy_from_cart((uint8 *)dgram->pkt_data, ip + hd_len, data_len);
   }
   dgram->ip_gateway = 0;
   dgram->recvd = &my_port;
@@ -440,30 +552,100 @@ static void deliver_ip_dgram(const volatile uint8 *frame, int16 flen) {
   my_port.stat_rcv_data += flen;
 }
 
-static void mb_rx_service(void) {
-  uint16 seq = mb_r16(MB_RX_SEQ_OFF);
-  uint16 len;
-  const volatile uint8 *frame;
+/* One published frame, wherever it sits in the window. */
+static void handle_frame(const volatile uint8 *frame, uint16 len) {
   uint16 type;
   static ARP arpCopy;
 
+  if (len < 14 || len > 1600) return;
+  type = (uint16)((frame[12] << 8) | frame[13]);
+  if (type == TYPE_ARP && len >= 14 + (uint16)sizeof(ARP)) {
+    copy_from_cart((uint8 *)&arpCopy, frame + 14, sizeof(ARP));
+    process_arp(&arpCopy, (int16)len);
+  } else if (type == TYPE_IP) {
+    deliver_ip_dgram(frame, (int16)len);
+  }
+}
+
+/* Single window (firmware without the ring): one frame, then ack so
+   the cartridge can publish the next. */
+static void mb_rx_service(void) {
+  uint16 seq = mb_r16(MB_RX_SEQ_OFF);
+
   if (seq == last_rx_seq || seq == 0) return;
 
-  len = mb_r16(MB_RX_LEN_OFF);
-  frame = (const volatile uint8 *)(ROM4_BASE + MB_RX_BUF_OFF);
-
-  if (len >= 14 && len <= 1600) {
-    type = (uint16)((frame[12] << 8) | frame[13]);
-    if (type == TYPE_ARP && len >= 14 + (uint16)sizeof(ARP)) {
-      memcpN((uint8 *)&arpCopy, (const uint8 *)(frame + 14), sizeof(ARP));
-      process_arp(&arpCopy, (int16)len);
-    } else if (type == TYPE_IP) {
-      deliver_ip_dgram(frame, (int16)len);
-    }
-  }
+  handle_frame((const volatile uint8 *)(ROM4_BASE + MB_RX_BUF_OFF),
+               mb_r16(MB_RX_LEN_OFF));
 
   last_rx_seq = seq;
   mb_cmd(MBC_RX_ACK, (uint16)(seq & 0xFF));
+}
+
+/* Start the RX handshake afresh: read what the cartridge offers, say
+   hello (which resyncs its side and selects the mode), then latch and
+   ack what is published so nothing is left waiting on us. Order
+   matters -- see my_set_state. Used at activation and whenever the two
+   sides have lost each other. */
+static void mb_rx_resync(void) {
+  /* A cartridge that is still booting serves zeros for the whole
+     window, capabilities included. Its magic appears only once the
+     mailbox is fully staged, so wait for that rather than adopt a mode
+     from a blank page; the caller tries again next slice. */
+  if (mb_r32(MB_PROTO_MAGIC_OFF) != MB_PROTO_MAGIC) return;
+  ring_mode = (mb_r16(MB_CAPS_OFF) & MB_CAP_RX_RING) != 0;
+  /* Say what we will actually do: the cartridge takes the byte as the
+     mode, with no cross-check against what it advertised. */
+  mb_cmd(MBC_DRIVER_HELLO, ring_mode ? DRIVER_VERSION_BYTE : 1);
+  idle_with_credits = 0;
+  if (ring_mode) {
+    rxr_consumed = mb_r16(MB_RXR_SEQ_OFF);
+    win_seq_at_hello = mb_r16(MB_RX_SEQ_OFF);
+    mb_cmd(MBC_RX_ACK, (uint16)(rxr_consumed & 0xFF));
+  } else {
+    last_rx_seq = mb_r16(MB_RX_SEQ_OFF);
+    mb_cmd(MBC_RX_ACK, (uint16)(last_rx_seq & 0xFF));
+  }
+}
+
+/* Ring: everything published since our last visit, up to the budget,
+   then one cumulative ack. The cartridge never republishes a slot
+   until its frame has been acked, so each slot is static while we
+   read it -- the same guarantee as the single window, held per slot. */
+static void mb_rx_service_ring(void) {
+  uint16 seq = mb_r16(MB_RXR_SEQ_OFF);
+  uint16 pending = (uint16)(seq - rxr_consumed);
+  int16 budget = RX_BUDGET_FRAMES;
+
+  /* A cartridge that restarts under a live driver comes back serving
+     the single window, which it never touches in ring mode; and its
+     ring sequence restarts, which reads here as an impossible gap.
+     Either way, say hello again so it rejoins us in ring mode. */
+  if (pending > MB_RXR_SLOTS || mb_r16(MB_RX_SEQ_OFF) != win_seq_at_hello) {
+    mb_rx_resync();
+    return;
+  }
+  if (pending == 0) {
+    /* Nothing new, yet the cartridge reports frames waiting: either
+       it is about to publish them, or our last ack never reached it
+       and it thinks the ring is full. After a few slices assume the
+       latter and ack again; a repeated ack is harmless. */
+    if (mb_r16(MB_RX_CREDITS_OFF) != 0 && ++idle_with_credits >= 3) {
+      idle_with_credits = 0;
+      mb_cmd(MBC_RX_ACK, (uint16)(rxr_consumed & 0xFF));
+    }
+    return;
+  }
+  idle_with_credits = 0;
+
+  while (rxr_consumed != seq && --budget >= 0) {
+    uint16 s = (uint16)(rxr_consumed + 1);
+    uint16 slot = (uint16)(s % MB_RXR_SLOTS);
+    handle_frame((const volatile uint8 *)(ROM4_BASE + MB_RXR_BUF_OFF +
+                                          (uint32)slot * MB_RXR_STRIDE),
+                 mb_r16(MB_RXR_LEN_OFF + (uint32)slot * 2));
+    rxr_consumed = s;
+  }
+  mb_cmd(MBC_RX_ACK, (uint16)(rxr_consumed & 0xFF));
 }
 
 /* Install routes for this port if nothing already covers it.
@@ -546,45 +728,54 @@ static void adopt_config(int16 with_routes) {
 static void cdecl my_send(PORT *port) {
   uint8 *cachedEther;
   uint32 network, ip_address;
+  int16 budget = TX_BUDGET_BYTES;
+  int16 looked = 8; /* datagrams considered, whatever became of them */
 
   if (doTxArp) {
     mb_tx_frame((const uint8 *)&arpEthPckt, sizeof(arpEthPckt), NULL, 0);
     doTxArp = FALSE;
-    return;
+    budget -= sizeof(arpEthPckt);
   }
 
   if (port != &my_port || my_port.active == 0) return;
 
-  for (;;) {
-    IP_DGRAM *next;
-    if (my_port.send == NULL) return;
-    next = my_port.send->next;
-    if (check_dgram_ttl(my_port.send) == E_NORMAL) break;
-    my_port.send = next;
-  }
-
   network = my_port.ip_addr & my_port.sub_mask;
 
-  if ((my_port.send->hdr.ip_dest & my_port.sub_mask) == network) {
-    ip_address = my_port.send->hdr.ip_dest;
-  } else {
-    if ((my_port.send->ip_gateway & my_port.sub_mask) == network) {
-      ip_address = my_port.send->ip_gateway;
+  /* As many datagrams as the budget allows. The EtherNEC driver this
+     descends from sent one per call because the NE2000 had one
+     transmit buffer; the cartridge streams frames back to back, and
+     STinG only calls us once per timeslice. */
+  while (budget > 0 && --looked >= 0) {
+    IP_DGRAM *dgram, *next;
+    int16 len1, len2;
+
+    for (;;) {
+      if (my_port.send == NULL) return;
+      next = my_port.send->next;
+      if (check_dgram_ttl(my_port.send) == E_NORMAL) break;
+      my_port.send = next;
+    }
+    dgram = my_port.send;
+    next = dgram->next;
+
+    if ((dgram->hdr.ip_dest & my_port.sub_mask) == network) {
+      ip_address = dgram->hdr.ip_dest;
+    } else if ((dgram->ip_gateway & my_port.sub_mask) == network) {
+      ip_address = dgram->ip_gateway;
     } else {
-      IP_DGRAM *next = my_port.send->next;
-      IP_discard(my_port.send, TRUE);
+      IP_discard(dgram, TRUE);
       my_port.send = next;
       my_port.stat_dropped++;
-      return;
+      continue;
     }
-  }
 
-  if ((my_port.send->hdr.ip_dest & ~my_port.sub_mask) == ~my_port.sub_mask) {
-    memsetN(ipEthPckt.eh.destination, 0xff, 6);
-  } else {
-    if ((cachedEther = arp_cache(ip_address)) != NULL) {
+    if ((dgram->hdr.ip_dest & ~my_port.sub_mask) == ~my_port.sub_mask) {
+      memsetN(ipEthPckt.eh.destination, 0xff, 6);
+    } else if ((cachedEther = arp_cache(ip_address)) != NULL) {
       memcpN(ipEthPckt.eh.destination, cachedEther, 6);
     } else {
+      /* No MAC for it yet: ask, and leave the queue alone until the
+         answer arrives or the wait runs out. */
       if (waitArp > 0) {
         --waitArp;
         return;
@@ -601,29 +792,25 @@ static void cdecl my_send(PORT *port) {
       }
       return;
     }
-  }
 
-  /* Destination MAC established: assemble header block and send. */
-  {
-    uint8 *work = ipEthPckt.ed;
-    int16 len1, len2;
-
-    memcpN(work, (const uint8 *)&my_port.send->hdr, sizeof(IP_HDR));
-    work += sizeof(IP_HDR);
-    if (my_port.send->opt_length > 0) {
-      memcpN(work, (const uint8 *)my_port.send->options,
-             my_port.send->opt_length);
+    /* Destination MAC established: assemble header block and send. */
+    {
+      uint8 *work = ipEthPckt.ed;
+      memcpN(work, (const uint8 *)&dgram->hdr, sizeof(IP_HDR));
+      work += sizeof(IP_HDR);
+      if (dgram->opt_length > 0) {
+        memcpN(work, (const uint8 *)dgram->options, dgram->opt_length);
+      }
     }
-
-    len1 = (int16)(sizeof(ETH_HDR) + sizeof(IP_HDR)) + my_port.send->opt_length;
-    len2 = my_port.send->pkt_length;
+    len1 = (int16)(sizeof(ETH_HDR) + sizeof(IP_HDR)) + dgram->opt_length;
+    len2 = dgram->pkt_length;
     if (mb_tx_frame((const uint8 *)&ipEthPckt, len1,
-                    (const uint8 *)my_port.send->pkt_data, len2) == 0) {
-      IP_DGRAM *next = my_port.send->next;
-      IP_discard(my_port.send, TRUE);
-      my_port.send = next;
-      my_port.stat_sd_data += len1 + len2;
-    }
+                    (const uint8 *)dgram->pkt_data, len2) != 0)
+      return;
+    IP_discard(dgram, TRUE);
+    my_port.send = next;
+    my_port.stat_sd_data += len1 + len2;
+    budget -= len1 + len2;
   }
 }
 
@@ -644,10 +831,24 @@ static void cdecl my_receive(PORT *port) {
     last_routed_ip = my_port.ip_addr;
     install_routes(adopted_gw);
   }
-  /* Consume up to a few frames per slice: after the ack the RP
-     publishes the next queued frame within ~1 ms, so a short second
-     look often pays off; the budget bounds our time in STinG's slice. */
-  for (budget = 4; --budget >= 0;) {
+  /* Keep STinG's timeslice short while we are active; never lengthen
+     it. STinG's own boot sequence sets it after we have loaded, so it
+     is checked here, once per slice, at the cost of one call. */
+  {
+    int16 fraction = (int16)(set_sysvars(-1, -1) & 0xffff);
+    if (fraction > MDNET_THREAD_FRACTION) {
+      saved_fraction = fraction;
+      set_sysvars(-1, MDNET_THREAD_FRACTION);
+    }
+  }
+  if (ring_mode) {
+    mb_rx_service_ring();
+    return;
+  }
+  /* Single window: one frame per ack. A second look rarely pays --
+     the cartridge republishes about a millisecond after the ack --
+     but it costs one read, and the budget bounds our time here. */
+  for (budget = RX_BUDGET_FRAMES; --budget >= 0;) {
     uint16 before = last_rx_seq;
     mb_rx_service();
     if (last_rx_seq == before) break;
@@ -671,19 +872,28 @@ static int16 cdecl my_set_state(PORT *port, int16 state) {
     arpEthPckt.arp.hardware_len = 6;
     arpEthPckt.arp.protocol_len = 4;
     adopt_config(TRUE);
-    /* Resync the RX handshake, then latch. Order matters: HELLO first
+    /* The cartridge says whether it has the ring; our HELLO says we
+       will use it. Older firmware has no capability word (the slot
+       reads as zero), so we fall back to the single window, and older
+       firmware ignores our version byte, so nothing else changes.
+
+       Resync the RX handshake, then latch. Order matters: HELLO first
        frees any publication stranded before we existed, and only THEN
        do we latch what is in the window, acking it so the RP is never
        left waiting on a frame we skipped. Latching before HELLO left a
        window where the RP could re-publish over a frame we had already
        started copying; latching after HELLO without acking could strand
-       a publication instead. This ordering does neither. */
-    mb_cmd(MBC_DRIVER_HELLO, DRIVER_VERSION_BYTE);
-    last_rx_seq = mb_r16(MB_RX_SEQ_OFF);
-    mb_cmd(MBC_RX_ACK, (uint16)(last_rx_seq & 0xFF));
+       a publication instead. This ordering does neither. The ring
+       sequence only moves in ring mode, which HELLO switches on, so
+       latching it here is safe in the same way. */
+    mb_rx_resync();
   } else {
     doTxArp = FALSE;
     waitArp = 0;
+    if (saved_fraction != -1) {
+      set_sysvars(-1, saved_fraction);
+      saved_fraction = -1;
+    }
     mb_cmd(MBC_DRIVER_BYE, 0);
     {
       IP_DGRAM *walk, *next;

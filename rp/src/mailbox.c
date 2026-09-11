@@ -8,6 +8,12 @@
  * Description: RP side of the MD/Net cart-bus mailbox. See mailbox.h and
  *              docs/mailbox-protocol.md.
  *
+ * Two RX contracts coexist: the single window a version-1 driver
+ * expects, and the slot ring a version-2 driver drains several frames
+ * at a time. The driver's HELLO picks one; until then, and after BYE,
+ * the single window is served, so a cartridge reflashed under an old
+ * driver behaves exactly as before.
+ *
  * Everything runs on Core 0: the commemul DMA ring absorbs ROM3 bursts
  * (a full 1500-byte TX stream is ~6 KB of the 32 KB ring), so
  * millisecond-scale poll latency is fine -- there is no timing-critical
@@ -68,7 +74,9 @@ static inline void mb_w32(uint32_t off, uint32_t v) {
 #define MAILBOX_TRACE_FRAMES 0
 #endif
 
-#define RXQ_SLOTS 8u
+// Deep enough to absorb a sender's burst: with STinG's 10000-byte
+// receive window and 536-byte segments, 18 frames can be in flight.
+#define RXQ_SLOTS 16u
 static struct {
   volatile uint16_t head, tail;
   uint16_t len[RXQ_SLOTS];
@@ -78,6 +86,13 @@ static struct {
 static uint16_t s_rxSeq = 0;       // last published sequence number
 static uint8_t s_rxAckLow = 0;     // low byte of the last MBC_RX_ACK
 static bool s_rxOutstanding = false;  // a published frame awaits its ack
+
+// Ring mode (driver version >= 2). s_rxrSeq is the newest published
+// sequence, s_rxrAcked the newest the ST has consumed; the difference
+// is the number of slots in use. Both wrap freely through 0.
+static bool s_ringMode = false;
+static uint16_t s_rxrSeq = 0;
+static uint16_t s_rxrAcked = 0;
 
 // ---- TX assembly (ROM3 stream -> WiFi) ----
 
@@ -109,6 +124,35 @@ static uint16_t rxq_depth(void) {
   return (uint16_t)((s_rxq.head + RXQ_SLOTS - s_rxq.tail) % RXQ_SLOTS);
 }
 
+// Stage a frame into the ROM4 window at m68k offset off.
+static void mb_wframe(uint32_t off, const uint8_t *f, uint16_t len) {
+  for (uint16_t i = 0; i < len; i++) {
+    mb_w8(off + i, f[i]);
+  }
+}
+
+// Ring mode: fill every free slot. A slot is free once the ST's
+// cumulative ack has passed the frame that was in it, so nothing here
+// is ever rewritten while the ST may still be reading it -- the same
+// invariant as the single window, held per slot.
+static void mailbox_publish_ring(void) {
+  while (s_rxq.tail != s_rxq.head &&
+         (uint16_t)(s_rxrSeq - s_rxrAcked) < MB_RXR_SLOTS) {
+    uint16_t t = s_rxq.tail;
+    uint16_t seq = (uint16_t)(s_rxrSeq + 1u);
+    uint32_t slot = seq % MB_RXR_SLOTS;
+    mb_wframe(MB_RXR_BUF_OFF + slot * MB_RXR_STRIDE, s_rxq.data[t],
+              s_rxq.len[t]);
+    mb_w16(MB_RXR_LEN_OFF + slot * 2u, s_rxq.len[t]);
+    s_rxq.tail = (uint16_t)((t + 1u) % RXQ_SLOTS);
+    __sync_synchronize();
+    s_rxrSeq = seq;
+    mb_w16(MB_RXR_SEQ_OFF, seq);
+    s_rxPublished++;
+  }
+  mb_w16(MB_RX_CREDITS_OFF, rxq_depth());
+}
+
 // Publish the next queued frame into the window. Only called when the
 // previous publication has been acked, so the buffer is never rewritten
 // while the ST may still be reading it.
@@ -119,6 +163,10 @@ static
 #endif
 void mailbox_publish_next(void) {
   uint16_t t;
+  if (s_ringMode) {
+    mailbox_publish_ring();
+    return;
+  }
   // THE protocol invariant, enforced here rather than at the call site:
   // the window is never rewritten while a publication is unacked, so
   // the ST can copy it at its leisure with no timing constraint at all.
@@ -130,10 +178,7 @@ void mailbox_publish_next(void) {
     return;  // nothing queued
   }
   uint16_t len = s_rxq.len[t];
-  const uint8_t *f = s_rxq.data[t];
-  for (uint16_t i = 0; i < len; i++) {
-    mb_w8(MB_RX_BUF_OFF + i, f[i]);
-  }
+  mb_wframe(MB_RX_BUF_OFF, s_rxq.data[t], len);
   s_rxq.tail = (uint16_t)((t + 1u) % RXQ_SLOTS);
   mb_w16(MB_RX_LEN_OFF, len);
   mb_w16(MB_RX_CREDITS_OFF, rxq_depth());
@@ -145,6 +190,14 @@ void mailbox_publish_next(void) {
   mb_w16(MB_RX_SEQ_OFF, s_rxSeq);
   s_rxOutstanding = true;
   s_rxPublished++;
+}
+
+// Forget everything queued or outstanding, in both modes. Used when a
+// driver arrives or leaves: what was published before has no consumer.
+static void mailbox_rx_reset(void) {
+  s_rxOutstanding = false;
+  s_rxrAcked = s_rxrSeq;
+  s_rxq.tail = s_rxq.head;
 }
 
 // Hand a completed TX frame to the WiFi.
@@ -195,7 +248,15 @@ void mailbox_on_rom3_sample(uint16_t sample) {
       break;
     case MBC_RX_ACK:
       s_rxAckLow = data;
-      if (s_rxOutstanding && data == (uint8_t)s_rxSeq) {
+      if (s_ringMode) {
+        // Cumulative: the ST consumed everything up to this sequence.
+        // At most MB_RXR_SLOTS can be outstanding, so the byte delta is
+        // unambiguous; anything larger is noise and is ignored.
+        uint8_t delta = (uint8_t)(data - (uint8_t)s_rxrAcked);
+        if (delta <= (uint16_t)(s_rxrSeq - s_rxrAcked)) {
+          s_rxrAcked = (uint16_t)(s_rxrAcked + delta);
+        }
+      } else if (s_rxOutstanding && data == (uint8_t)s_rxSeq) {
         s_rxOutstanding = false;  // window free; next publish in poll
       }
       break;
@@ -230,24 +291,55 @@ void mailbox_on_rom3_sample(uint16_t sample) {
       // and start clean. s_rxSeq stays monotonic: the driver latches
       // the current value at set_state, so the next publish always
       // differs from it.
-      s_rxOutstanding = false;
-      s_rxq.tail = s_rxq.head;
+      //
+      // The version byte also picks the RX mode: a version-2 driver
+      // reads the ring, a version-1 driver the single window, and it
+      // must be the driver's choice because it is the side that cannot
+      // be updated in the field -- a cartridge can be reflashed without
+      // anyone touching the ST.
+      mailbox_rx_reset();
+      s_ringMode = data >= 2u;
       s_txActive = false;
       s_txLen = 0;
       s_txFill = 0;
       s_driverHello = true;
-      DPRINTF("mailbox: driver hello, version %u (rx resync at seq %u)\n",
-              (unsigned)data, (unsigned)s_rxSeq);
+      DPRINTF("mailbox: driver hello, version %u (%s, rx resync at seq %u)\n",
+              (unsigned)data, s_ringMode ? "ring" : "single window",
+              (unsigned)(s_ringMode ? s_rxrSeq : s_rxSeq));
       break;
     case MBC_DRIVER_BYE:
       DPRINTF("mailbox: driver bye\n");
       s_driverHello = false;
-      s_rxOutstanding = false;  // no consumer left; do not block publishes
-      s_rxq.tail = s_rxq.head;
+      mailbox_rx_reset();  // no consumer left; do not block publishes
+      s_ringMode = false;  // whatever loads next starts from the v1 contract
       break;
     default:
       break;  // MBC_NOP + unassigned channels: ignore
   }
+}
+
+bool mailbox_rx_wanted(const uint8_t *f, uint16_t len, uint32_t own_ip) {
+  uint16_t type;
+  uint32_t dst;
+  if (len < 14u) {
+    return false;
+  }
+  type = (uint16_t)(((uint16_t)f[12] << 8) | f[13]);
+  if (type == 0x0806u) {
+    return true;  // ARP: the driver keeps its own cache
+  }
+  if (type != 0x0800u || len < 34u) {
+    return false;  // IPv6, LLDP, and friends: nothing on the ST wants them
+  }
+  dst = ((uint32_t)f[30] << 24) | ((uint32_t)f[31] << 16) |
+        ((uint32_t)f[32] << 8) | (uint32_t)f[33];
+  if (dst == own_ip) {
+    return false;  // the Pico's own traffic (DHCP renewals, probes)
+  }
+  if ((dst >> 28) == 0xEu) {
+    return false;  // multicast
+  }
+  return true;
 }
 
 #ifndef MAILBOX_HOST_TEST
@@ -265,7 +357,12 @@ static err_t mailbox_netif_input(struct pbuf *p, struct netif *inp) {
     static uint8_t rxbuf[MB_FRAME_MAX];
     pbuf_copy_partial(p, rxbuf, len, 0);
     autoconf_observe(rxbuf, len);  // watch for defenders of our candidate
-    mailbox_rx_enqueue(rxbuf, len);
+    // Every frame handed over costs the ST a service slot whether it
+    // wants the frame or not, so filter here rather than in the driver.
+    if (mailbox_rx_wanted(rxbuf, len,
+                          lwip_ntohl(ip4_addr_get_u32(netif_ip4_addr(inp))))) {
+      mailbox_rx_enqueue(rxbuf, len);
+    }
   }
   if (s_orig_input != NULL) {
     return s_orig_input(p, inp);
@@ -299,6 +396,15 @@ void mailbox_init(void) {
   if (cyw43_wifi_get_mac(&cyw43_state, CYW43_ITF_STA, mac) != 0) {
     DPRINTF("mailbox: cyw43 MAC unavailable, using fallback\n");
   }
+  // Capabilities go in before the magic: the driver treats the magic
+  // as "the mailbox is staged" and reads the capabilities on its
+  // strength, so they must never be observable as zero after it.
+  mb_w16(MB_CAPS_OFF, MB_CAP_RX_RING);
+  mb_w16(MB_RXR_SEQ_OFF, 0);
+  for (uint32_t i = 0; i < MB_RXR_SLOTS; i++) {
+    mb_w16(MB_RXR_LEN_OFF + i * 2u, 0);
+  }
+  __sync_synchronize();
   mb_w32(MB_PROTO_MAGIC_OFF, MB_PROTO_MAGIC);
   mb_w16(MB_PROTO_VER_OFF, MB_PROTO_VERSION);
   for (int i = 0; i < 6; i++) {
@@ -341,12 +447,16 @@ void mailbox_poll(void) {
     s_lastRx = s_rxPublished;
     s_lastTx = s_txFrames;
     DPRINTF("mailbox: rx pub=%lu (%lu/s) drop=%lu q=%u tx=%lu (%lu/s) "
-            "err=%lu seq=%u ack=%u/%u hello=%d\n",
+            "err=%lu %s seq=%u ack=%u/%u out=%u hello=%d\n",
             (unsigned long)s_rxPublished, (unsigned long)rxRate,
             (unsigned long)s_rxDropped, (unsigned)rxq_depth(),
             (unsigned long)s_txFrames, (unsigned long)txRate,
-            (unsigned long)s_txErrors, (unsigned)s_rxSeq,
-            (unsigned)s_rxAckLow, (unsigned)(s_rxSeq & 0xFFu),
+            (unsigned long)s_txErrors, s_ringMode ? "ring" : "win",
+            (unsigned)(s_ringMode ? s_rxrSeq : s_rxSeq),
+            (unsigned)s_rxAckLow,
+            (unsigned)((s_ringMode ? s_rxrAcked : s_rxSeq) & 0xFFu),
+            (unsigned)(s_ringMode ? (uint16_t)(s_rxrSeq - s_rxrAcked)
+                                  : (s_rxOutstanding ? 1u : 0u)),
             (int)s_driverHello);
   }
 }

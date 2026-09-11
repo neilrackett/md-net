@@ -98,6 +98,165 @@ static void test_rx_publish_ack(void) {
   printf("PASS: RX publish/ack handshake + driver-hello resync\n");
 }
 
+// Ring mode, as a version-2 driver drives it: hello with version 2,
+// then consume frames slot by slot and ack cumulatively.
+static void test_rx_ring(void) {
+  uint8_t f[MB_RXR_SLOTS + 4][60];
+  uint16_t base, seq;
+  unsigned i, j;
+
+  mailbox_on_rom3_sample(rom3(MBC_DRIVER_HELLO, 2));
+  base = m68k_r16(MB_RXR_SEQ_OFF);
+
+  for (i = 0; i < MB_RXR_SLOTS + 4; i++) {
+    memset(f[i], (int)(0x30 + i), sizeof(f[i]));
+    f[i][59] = (uint8_t)i;
+    assert(mailbox_rx_enqueue(f[i], sizeof(f[i])));
+  }
+
+  // Every free slot fills at once; the rest wait for acks.
+  mailbox_publish_next();
+  seq = m68k_r16(MB_RXR_SEQ_OFF);
+  assert((uint16_t)(seq - base) == MB_RXR_SLOTS && "ring filled, no more");
+  for (i = 0; i < MB_RXR_SLOTS; i++) {
+    uint16_t s = (uint16_t)(base + 1u + i);
+    uint32_t slot = s % MB_RXR_SLOTS;
+    assert(m68k_r16(MB_RXR_LEN_OFF + slot * 2u) == 60 && "slot length");
+    for (j = 0; j < 60; j++) {
+      assert(m68k_r8(MB_RXR_BUF_OFF + slot * MB_RXR_STRIDE + j) == f[i][j] &&
+             "slot holds its frame, m68k byte order");
+    }
+  }
+  mailbox_publish_next();
+  assert(m68k_r16(MB_RXR_SEQ_OFF) == seq && "nothing published without acks");
+
+  // A bogus ack (further ahead than anything outstanding) is ignored.
+  mailbox_on_rom3_sample(rom3(MBC_RX_ACK, (uint8_t)(base + 100u)));
+  mailbox_publish_next();
+  assert(m68k_r16(MB_RXR_SEQ_OFF) == seq && "bogus ack ignored");
+
+  // Consuming three frees three slots; three more appear, in order,
+  // and the slot the ST is still reading is left alone.
+  mailbox_on_rom3_sample(rom3(MBC_RX_ACK, (uint8_t)(base + 3u)));
+  mailbox_publish_next();
+  assert((uint16_t)(m68k_r16(MB_RXR_SEQ_OFF) - base) == MB_RXR_SLOTS + 3u);
+  {
+    uint32_t slot4 = (uint32_t)(base + 4u) % MB_RXR_SLOTS;
+    assert(m68k_r8(MB_RXR_BUF_OFF + slot4 * MB_RXR_STRIDE + 59) == 3 &&
+           "unacked slot untouched");
+    uint32_t slot9 = (uint32_t)(base + MB_RXR_SLOTS + 1u) % MB_RXR_SLOTS;
+    assert(m68k_r8(MB_RXR_BUF_OFF + slot9 * MB_RXR_STRIDE + 59) ==
+               MB_RXR_SLOTS && "freed slot reused for the next frame");
+  }
+
+  // Ack everything: the last queued frame goes out too.
+  mailbox_on_rom3_sample(
+      rom3(MBC_RX_ACK, (uint8_t)(base + MB_RXR_SLOTS + 3u)));
+  mailbox_publish_next();
+  assert((uint16_t)(m68k_r16(MB_RXR_SEQ_OFF) - base) == MB_RXR_SLOTS + 4u);
+  mailbox_on_rom3_sample(
+      rom3(MBC_RX_ACK, (uint8_t)(base + MB_RXR_SLOTS + 4u)));
+
+  // The legacy window was never written in ring mode.
+  assert(m68k_r16(MB_RX_SEQ_OFF) == 0 ||
+         m68k_r8(MB_RX_BUF_OFF) != f[0][0]);
+  printf("PASS: RX ring fill, cumulative ack, slot reuse, bogus ack\n");
+}
+
+// Run the ring through both wraps: the 8-bit ack byte (every 256) and
+// the 16-bit sequence (once), one frame at a time and in bursts.
+static void test_rx_ring_wrap(void) {
+  uint8_t f[60];
+  uint32_t n;
+  uint16_t seq = m68k_r16(MB_RXR_SEQ_OFF);
+  memset(f, 0x5A, sizeof(f));
+  for (n = 0; n < 70000u; n++) {
+    unsigned burst = 1u + (unsigned)(n % 5u), k;
+    for (k = 0; k < burst; k++) assert(mailbox_rx_enqueue(f, sizeof(f)));
+    mailbox_publish_next();
+    assert((uint16_t)(m68k_r16(MB_RXR_SEQ_OFF) - seq) == burst &&
+           "burst published in full");
+    seq = m68k_r16(MB_RXR_SEQ_OFF);
+    mailbox_on_rom3_sample(rom3(MBC_RX_ACK, (uint8_t)seq));
+  }
+  printf("PASS: RX ring across the 8-bit ack and 16-bit sequence wraps\n");
+}
+
+// A partial ack that straddles the 8-bit boundary: drive the sequence
+// to 253, publish five, ack three (through 256), then the rest.
+static void test_rx_ring_partial_ack_at_wrap(void) {
+  uint8_t f[60];
+  uint16_t seq;
+  unsigned i;
+  memset(f, 0x3C, sizeof(f));
+  seq = m68k_r16(MB_RXR_SEQ_OFF);
+  while ((uint8_t)seq != 253) {
+    assert(mailbox_rx_enqueue(f, sizeof(f)));
+    mailbox_publish_next();
+    seq = m68k_r16(MB_RXR_SEQ_OFF);
+    mailbox_on_rom3_sample(rom3(MBC_RX_ACK, (uint8_t)seq));
+  }
+  for (i = 0; i < 8; i++) assert(mailbox_rx_enqueue(f, sizeof(f)));
+  mailbox_publish_next();
+  assert((uint8_t)m68k_r16(MB_RXR_SEQ_OFF) == 5 && "ring full: 254..5");
+  mailbox_on_rom3_sample(rom3(MBC_RX_ACK, 0));  // 254, 255, 256(=0) consumed
+  for (i = 0; i < 6; i++) assert(mailbox_rx_enqueue(f, sizeof(f)));
+  mailbox_publish_next();
+  assert((uint8_t)m68k_r16(MB_RXR_SEQ_OFF) == 8 &&
+         "three slots freed across the wrap, no more");
+  mailbox_on_rom3_sample(rom3(MBC_RX_ACK, 8));
+  mailbox_publish_next();
+  assert((uint8_t)m68k_r16(MB_RXR_SEQ_OFF) == 11 && "remaining three");
+  mailbox_on_rom3_sample(rom3(MBC_RX_ACK, 11));
+  printf("PASS: partial cumulative ack across the 8-bit wrap\n");
+}
+
+// A version-1 driver arriving later gets the single window back.
+static void test_mode_switch_back(void) {
+  uint8_t f[60];
+  uint16_t rseq, seq;
+  memset(f, 0x77, sizeof(f));
+  mailbox_on_rom3_sample(rom3(MBC_DRIVER_BYE, 0));
+  rseq = m68k_r16(MB_RXR_SEQ_OFF);
+  assert(mailbox_rx_enqueue(f, sizeof(f)));
+  mailbox_publish_next();
+  assert(m68k_r16(MB_RXR_SEQ_OFF) == rseq && "ring idle after bye");
+  seq = m68k_r16(MB_RX_SEQ_OFF);
+  assert(seq != 0 && m68k_r8(MB_RX_BUF_OFF) == 0x77 && "window served");
+  mailbox_on_rom3_sample(rom3(MBC_RX_ACK, (uint8_t)seq));
+  mailbox_on_rom3_sample(rom3(MBC_DRIVER_HELLO, 1));
+  assert(mailbox_rx_enqueue(f, sizeof(f)));
+  mailbox_publish_next();
+  assert(m68k_r16(MB_RX_SEQ_OFF) != seq && "v1 hello: window mode");
+  assert(m68k_r16(MB_RXR_SEQ_OFF) == rseq && "ring untouched by a v1 driver");
+  printf("PASS: bye/hello(1) return to the single window\n");
+}
+
+// The RP-side filter: only what the ST could want costs it a slot.
+static void test_rx_filter(void) {
+  uint8_t f[64];
+  const uint32_t own = 0xC0A801F1u;  // 192.168.1.241
+  memset(f, 0, sizeof(f));
+  f[12] = 0x08; f[13] = 0x06;
+  assert(mailbox_rx_wanted(f, 60, own) && "ARP wanted");
+  f[12] = 0x86; f[13] = 0xDD;
+  assert(!mailbox_rx_wanted(f, 60, own) && "IPv6 dropped");
+  f[12] = 0x08; f[13] = 0x00;
+  f[30] = 0xC0; f[31] = 0xA8; f[32] = 0x01; f[33] = 0xF2;
+  assert(mailbox_rx_wanted(f, 60, own) && "IP to the ST wanted");
+  assert(!mailbox_rx_wanted(f, 20, own) && "truncated IP dropped");
+  f[33] = 0xFF;
+  assert(mailbox_rx_wanted(f, 60, own) && "subnet broadcast wanted");
+  f[30] = f[31] = f[32] = f[33] = 0xFF;
+  assert(mailbox_rx_wanted(f, 60, own) && "limited broadcast wanted");
+  f[30] = 0xC0; f[31] = 0xA8; f[32] = 0x01; f[33] = 0xF1;
+  assert(!mailbox_rx_wanted(f, 60, own) && "Pico's own unicast dropped");
+  f[30] = 0xE0; f[31] = 0x00; f[32] = 0x00; f[33] = 0xFB;
+  assert(!mailbox_rx_wanted(f, 60, own) && "multicast dropped");
+  assert(!mailbox_rx_wanted(f, 10, own) && "runt dropped");
+  printf("PASS: RX filter (ARP, IP for the ST, broadcasts; not own/multicast/IPv6)\n");
+}
+
 static void test_decode_matches_driver_encoding(void) {
   // The driver issues: (void)*(volatile uint8*)(0xFB0000 + (chan<<9) + (data<<1))
   // The PIO sample is the low 16 address bits. Verify decode for all values.
@@ -146,6 +305,11 @@ int main(void) {
   test_decode_matches_driver_encoding();
   test_tx_roundtrip();
   test_rx_publish_ack();
+  test_rx_ring();
+  test_rx_ring_wrap();
+  test_rx_ring_partial_ack_at_wrap();
+  test_mode_switch_back();
+  test_rx_filter();
   test_autoconf_candidates();
   printf("all mailbox tests pass\n");
   return 0;

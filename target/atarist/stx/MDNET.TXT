@@ -62,6 +62,18 @@ If you would rather use a different DNS server, set NAMESERVER in
 DEFAULT.CFG yourself; the installer only fills it in when it is
 not already set.
 
+While the WiFi port is active the driver keeps STinG servicing it
+every 10 ms (the same as THREADING = 10 in DEFAULT.CFG), unless you
+have set it lower yourself, and puts the previous setting back when
+the port is turned off. A slower setting, whether from DEFAULT.CFG or
+the STinG control panel, is overridden for as long as the port is
+active. Frames wait for that timeslice, so a longer one means a
+slower connection.
+
+Any MD/Net firmware works with any MDNET.STX: a cartridge updated
+under an older driver keeps working as before. Run INSTALL.TOS again
+to get the driver that matches, which is the faster one.
+
 Q. Why don't I see "MD/Net connected" message at boot?
 A. Check that the MD/Net firmware is installed and your SidecarTridge
    Multi-device is connected to WiFi.

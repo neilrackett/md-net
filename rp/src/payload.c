@@ -25,8 +25,11 @@
 // silently, and the first symptom would be a corrupt driver on the ST.
 _Static_assert(MDNET_PAYLOAD_OFF >= MB_RX_BUF_OFF + MB_FRAME_MAX,
                "payload overlaps the mailbox RX buffer");
-_Static_assert(MDNET_PAYLOAD_OFF + sizeof(mdnet_payload) <= 0x10000u,
-               "payload overflows the ROM4 window");
+_Static_assert(MDNET_PAYLOAD_OFF + sizeof(mdnet_payload) <= MB_RXR_BUF_OFF,
+               "payload overlaps the mailbox RX ring");
+_Static_assert(MB_RXR_BUF_OFF + MB_RXR_SLOTS * MB_RXR_STRIDE <= 0x10000u,
+               "RX ring overflows the ROM4 window");
+_Static_assert(MB_FRAME_MAX <= MB_RXR_STRIDE, "RX ring slot too small");
 
 void payload_publish(void) {
   // The cart bus swaps bytes within each 16-bit word, so byte k of the

@@ -145,10 +145,9 @@ address set by hand always wins.
 ## What to expect
 
 - **It's an 8 MHz machine from 1985.** Interactive use — ping, small
-  pages, gapFTP — feels fine. Bulk transfers run at roughly 2 KB/s:
-  the cartridge bridge itself moves ~21 KB/s each way, but STinG's TCP
-  sends small segments one at a time, and that, not the WiFi, sets the
-  pace. Round trips are ~60–210 ms.
+  pages, gapFTP — feels fine. Bulk transfers are paced by the ST: every
+  byte in or out passes through the 68000, and STinG's TCP has its own
+  per-segment costs, so the WiFi is never the limit.
 - **STinG only** for now — MiNTNet / MagiCNet are not supported.
 - **Two bombs appear when `INSTALL.TOS` returns to the desktop.** This
   is a quirk of running programs from a cartridge on the ST — it

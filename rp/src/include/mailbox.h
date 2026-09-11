@@ -37,7 +37,21 @@
 #define MB_RX_LEN_OFF 0x4046u       // 2 B: published frame length
 #define MB_TX_ACK_OFF 0x4048u       // 2 B: echoes last committed TX seq
 #define MB_RX_CREDITS_OFF 0x404Au   // 2 B: RX frames still queued (diag)
-#define MB_RX_BUF_OFF 0x5000u       // 1600 B: the published RX frame
+#define MB_CAPS_OFF 0x404Cu         // 2 B: firmware capabilities (MB_CAP_*)
+#define MB_RXR_SEQ_OFF 0x404Eu      // 2 B: sequence of the newest ring frame
+#define MB_RXR_LEN_OFF 0x4050u      // 2 B x MB_RXR_SLOTS: frame length per slot
+#define MB_RX_BUF_OFF 0x5000u       // 1600 B: the published RX frame (v1)
+#define MB_RXR_BUF_OFF 0xC000u      // MB_RXR_SLOTS x MB_RXR_STRIDE: the ring
+
+// RX ring (protocol v1 with MB_CAP_RX_RING; driver version byte >= 2).
+// Frame with sequence s lives in slot s % MB_RXR_SLOTS. The ST acks
+// cumulatively with the low byte of the last sequence it consumed; the
+// RP never has more than MB_RXR_SLOTS frames outstanding, so the byte
+// is unambiguous. The legacy single window at MB_RX_BUF_OFF is left
+// untouched in ring mode and is what a version-1 driver still gets.
+#define MB_RXR_SLOTS 8u
+#define MB_RXR_STRIDE 2048u
+#define MB_CAP_RX_RING 0x0001u
 
 #define MB_PROTO_MAGIC 0x4D444E42u  // 'MDNB'
 #define MB_PROTO_VERSION 1u
@@ -71,6 +85,12 @@ void mailbox_on_rom3_sample(uint16_t sample);
 // sequence number is bumped so a driver already running can notice.
 void mailbox_publish_config(uint32_t ip, uint32_t mask, uint32_t gw,
                             uint32_t dns);
+
+// Is this received frame worth a slot on the ST? Only ARP and IP get
+// through, and of IP only what the ST could want: not the Pico's own
+// unicast traffic (lwIP handles that) and not multicast (STinG has
+// none). own_ip is the Pico's STA address in host order.
+bool mailbox_rx_wanted(const uint8_t *frame, uint16_t len, uint32_t own_ip);
 
 // Host-test seams: the RX publish queue and the publish step.
 bool mailbox_rx_enqueue(const uint8_t *frame, uint16_t len);

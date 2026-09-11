@@ -28,11 +28,16 @@
  *                                        leaves CART_CMD_NOP)
  *   $FA4004  (reserved)           12 B
  *   $FA4010  SHARED_VARIABLES    240 B  (60 indexed 4-byte slots.
- *                                        Slot 0 = MDNET_STATUS; the
- *                                        rest are app-free.)
+ *                                        Slot 0 = MDNET_STATUS; slots
+ *                                        4-19 ($4020-$405F) are the
+ *                                        mailbox fields, see mailbox.h)
  *   $FA4100  MDNET_MSG           256 B  (NUL-terminated boot message
  *                                        composed by the RP)
- *   $FA4200  APP_FREE                   (free arena to end of region)
+ *   $FA4200  APP_FREE                   (arena to end of region; the
+ *                                        mailbox takes $5000 (RX
+ *                                        window), $6000 (payload) and
+ *                                        $C000-$FFFF (RX ring) --
+ *                                        payload.c asserts the fit)
  *   $FAFFFF  end of region
  */
 #define CART_CARTRIDGE_CODE_SIZE         0x4000  /* 16 KB cart-image budget */

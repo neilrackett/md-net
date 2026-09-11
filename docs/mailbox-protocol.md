@@ -39,7 +39,12 @@ big-endian, written by the RP with the `k^1` swap.
 | `$4046` | `MB_RX_LEN` | 2 B | Length of the published RX frame (0 = none). |
 | `$4048` | `MB_TX_ACK` | 2 B | Echoes the last committed TX sequence (flow control). |
 | `$404A` | `MB_RX_CREDITS` | 2 B | RX frames queued on the RP beyond the published one (diagnostic). |
-| `$5000` | `MB_RX_BUF` | 1600 B | The published RX frame, contiguous. |
+| `$404C` | `MB_CAPS` | 2 B | Firmware capabilities. Bit 0: the RX ring below exists. Zero on firmware that predates it. |
+| `$404E` | `MB_RXR_SEQ` | 2 B | Ring: sequence of the newest published frame. |
+| `$4050` | `MB_RXR_LEN` | 8 × 2 B | Ring: length of the frame in each slot. |
+| `$5000` | `MB_RX_BUF` | 1600 B | The published RX frame, contiguous (single-window mode). |
+| `$6000` | payload | ~12 KB | The driver and its notes, read by `INSTALL.TOS`. |
+| `$C000` | `MB_RXR_BUF` | 8 × 2048 B | Ring: slot *i* holds the frame whose sequence is *i* mod 8. |
 
 Publication order (RP side): frame bytes → `MB_RX_LEN` → memory barrier
 → `MB_RX_SEQ`++. The driver polls `MB_RX_SEQ`; on change it reads len,
@@ -65,6 +70,43 @@ Two details that are load-bearing rather than incidental:
   publication blocks every later one and RX is dead for the entire
   session. `MBC_DRIVER_BYE` does the same on the way out.
 
+## RX ring (driver version 2)
+
+One frame per publish-and-ack was the throughput ceiling: STinG calls a
+port's `receive` once per timeslice, so the single window moved one
+frame per slice, whatever the slice length. The ring keeps up to eight
+frames published at once.
+
+Negotiation is the driver's choice, because the driver is the side that
+cannot be updated in the field: a cartridge can be reflashed without
+anyone touching the ST. The RP advertises the ring in `MB_CAPS`; a
+driver that reads it sends `MBC_DRIVER_HELLO` with version byte 2, and
+only then does the RP switch to ring mode. Every other pairing gets the
+single window, unchanged:
+
+| Firmware | Driver v1 | Driver v2 |
+| --- | --- | --- |
+| without `MB_CAPS` | single window | single window (`MB_CAPS` reads 0) |
+| with the ring | single window (HELLO says 1) | ring |
+
+`MBC_DRIVER_BYE` returns the RP to single-window mode, so whatever
+loads next starts from the v1 contract.
+
+Publication: frame *s* goes into slot *s* mod 8, its length into
+`MB_RXR_LEN[slot]`, then a memory barrier, then `MB_RXR_SEQ = s`. The
+driver reads `MB_RXR_SEQ`, consumes every sequence after the last one it
+handled (up to its per-slice budget), and acks once with the low byte of
+the last sequence consumed. The ack is cumulative; with at most eight
+frames outstanding the byte is unambiguous, and an ack that claims more
+than is outstanding is ignored. The sequence wraps freely through 0.
+
+The invariant is the same as the window's, held per slot: the RP never
+rewrites a slot until the frame in it has been acked, so whatever the
+ST is copying is static under it. A gap of more than eight between
+`MB_RXR_SEQ` and the driver's count cannot come from the RP; the driver
+treats it as the two sides having lost each other, skips to the newest
+sequence and acks it.
+
 ## ROM3 command encoding (ST writes, RP captures via commemul)
 
 Same shape as the proven EtherNEC encoding: address bits A9-A13 select
@@ -74,23 +116,36 @@ a channel, A1-A8 carry a data byte. `chan = (addr>>9)&0x1F`,
 | Chan | Name | Meaning of data byte |
 | --- | --- | --- |
 | `$00` | `MBC_NOP` | ignored (bus noise guard). |
-| `$01` | `MBC_RX_ACK` | low byte of the consumed `MB_RX_SEQ` — RP may publish the next frame. |
+| `$01` | `MBC_RX_ACK` | Single window: low byte of the consumed `MB_RX_SEQ` — RP may publish the next frame. Ring: low byte of the last sequence consumed, cumulative. |
 | `$02` | `MBC_TX_START` | TX length low byte. |
 | `$03` | `MBC_TX_LEN_HI` | TX length high byte (follows TX_START). |
 | `$04` | `MBC_TX_DATA` | next TX payload byte (streamed len times). |
 | `$05` | `MBC_TX_COMMIT` | low byte of a TX sequence number; RP validates byte count and bridges the frame. |
-| `$06` | `MBC_DRIVER_HELLO` | driver version byte; announces install (RP logs it). |
+| `$06` | `MBC_DRIVER_HELLO` | driver version byte; announces install and resyncs RX. 1 = single window, 2 or more = ring. The RP takes it as the mode without cross-checking `MB_CAPS`, so the driver sends what it will actually do. |
 | `$07` | `MBC_DRIVER_BYE` | driver uninstalling. |
 
 TX flow: `TX_START(len_lo)` → `TX_LEN_HI(len_hi)` → len × `TX_DATA(b)`
 → `TX_COMMIT(seq)`. commemul's ring preserves order and loses nothing
 (verified: this is exactly how EtherNEC TX worked flawlessly throughout
 the netusbee effort). The RP sets `MB_TX_ACK = seq` when the frame is
-away; the driver need not wait for it except for back-pressure.
+away; the driver need not wait for it except for back-pressure. The
+driver streams several frames back to back in one `send` call (about
+3.1 KB per call); the 32 KB ring holds ten full frames (one 16-bit
+sample per byte) and is drained at least every millisecond, so it
+never fills.
 
-Byte cost: one ROM3 bus read (~500 ns) per TX byte — ~1500 byte frame
-≈ 0.8 ms. RX copy is ordinary memory-read speed. Both comfortably beat
-the serial-era throughput STinG was designed around.
+Byte cost, on the ST: the TX loop is four instructions per byte, about
+4 µs, so a full frame costs ~6 ms; the RX copy uses long moves, ~1 ms
+per full frame. Both are paid by the 68000, which is what sets the
+bulk rate now that frames are no longer rationed per timeslice.
+
+## What the RP forwards
+
+Every frame handed over costs the ST a service slot whether it wants
+the frame or not, so the RP filters first: ARP always; IP only when it
+is not addressed to the RP's own address (lwIP's traffic) and not
+multicast (STinG has none); nothing else (IPv6, LLDP, and so on). The
+driver still applies its own IP-address check on what arrives.
 
 ## DHCP
 
@@ -107,7 +162,27 @@ A STinG port driver, port name **"WiFi"**, modeled on the EtherNEC
 STinG driver's structure (`my_send` / `my_receive` / `my_set_state` /
 `my_cntrl`, installed via the STinG cookie handshake). Differences:
 no NE2000 probe, no ring arithmetic — `my_receive` polls `MB_RX_SEQ`
-and block-copies from `MB_RX_BUF`; `my_send` streams the frame through
-the ROM3 command channel. ARP stays in the driver (reused from the
-EtherNEC source) — the RP bridges raw Ethernet frames exactly as on
-the netusbee branch, so lwIP-side behaviour is unchanged.
+and block-copies from `MB_RX_BUF`, or drains the ring; `my_send`
+streams frames through the ROM3 command channel. ARP stays in the
+driver (reused from the EtherNEC source) — the RP bridges raw Ethernet
+frames exactly as on the netusbee branch, so lwIP-side behaviour is
+unchanged.
+
+While the port is active the driver also keeps STinG's timeslice at
+its shortest (`set_sysvars`, THREADING = 10) unless it is already
+shorter, and restores the previous value when the port goes inactive.
+It is re-applied from `my_receive` on every slice because STinG's
+loader and STinG Port Setup both set the slice after the driver has
+loaded. Frames per slice are no longer the limit, but the slice still
+sets how long an inbound segment waits for its ACK to leave.
+
+If the cartridge restarts under a live driver it comes back in
+single-window mode with a fresh ring sequence. The driver notices
+either sign (the single window's sequence moving, or an impossible gap
+in the ring sequence) and repeats the HELLO handshake, but only once
+the magic is back: while the cartridge boots the window reads as
+zeros, and `MB_CAPS` is staged before the magic so the magic vouches
+for it. Should an ack ever be lost, the ring would stall with frames
+waiting on the RP (`MB_RX_CREDITS` non-zero) and nothing new
+published; the driver re-sends its ack after three such slices, which
+is harmless when nothing was lost.

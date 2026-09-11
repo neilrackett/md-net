@@ -46,7 +46,11 @@ hardware-validated 2026-07-28). **v0.5.0** — true zero-config: the
 port activates itself, the installer ships next to a ready-to-go STinG
 bundle, and a fresh machine goes bundle → installer → reboot → browsing
 with no configuration touched at all (done, hardware-validated
-2026-08-10, twice, from a clean setup). The self-activation mechanics:
+2026-08-10, twice, from a clean setup). **v0.6.0** — throughput: the
+RX ring, several datagrams per `send`, the 10 ms slice and the faster
+copy loops, negotiated so any firmware works with any driver (stable
+on hardware 2026-09-10; speed not yet measured -- see Performance
+below). The self-activation mechanics:
 `driver_main` activates its
 own port during `load_stx()` (directly via `my_set_state`, not
 `on_port`, so a port-name collision cannot redirect it), gated on the
@@ -105,16 +109,37 @@ EtherNEC STinG driver (`EmmanuelKasper/ethernec`: `ENESTNG.C`), which
 implements the same port API (`my_send` / `my_receive` /
 `my_set_state` / `my_cntrl`).
 
-**Performance, measured — do not re-litigate without new evidence.**
-The bridge moves **~21 KB/s each way** (1408-byte ping flood: 15
-frames/s each way, queue full, drops climbing — i.e. genuinely
-saturated). FTP over the same link moves **~2 KB/s**, and that gap is
-*not* ours: during FTP the queue stays empty, nothing is dropped, and
-the ST uses about 4 of the 20+ service opportunities per second. The
-cost is ~266 ms per segment with 536-byte segments (STinG advertises no
-MSS option despite `MSS = 1460`), which points at a delayed ACK plus a
-window holding one segment in flight — inside STinG's TCP or the FTP
-client, not the cartridge.
+**Performance.** Measured on v0.5 (single window, one frame per
+`send`/`receive` call): the bridge moved **~21 KB/s each way**
+(1408-byte ping flood: 15 frames/s each way, queue full, drops
+climbing). That was not saturation of the bus but of the handshake:
+STinG's `poll_ports` (`sting/kernel.c`, driven from `thread.s` every
+`fraction` ticks of the 200 Hz timer, `fraction = THREADING/5`, 50 ms
+in the stock config) calls each port's `receive` once and `send` once
+per slice, and the driver moved one frame per call — 20 frames/s by
+arithmetic. The current design lifts it in four places, none of which
+has been measured on hardware yet: the RX ring (eight slots, drained up
+to four per call), several datagrams per `send` (4.6 KB budget), the
+driver holding STinG's slice at 10 ms via `set_sysvars` while active
+(re-applied from `my_receive`, because `sting/install.c` calls
+`set_sysvars(1, THREADING/5)` after `load_stx()` and STinG Port
+Setup's boot pass sets its saved value too -- a one-off at activation
+is undone before the first slice), and long-word / four-instruction
+copy loops. The RP also filters what
+it forwards (ARP, IP for the ST; not its own or multicast), since every
+frame costs the ST a slot. Expect the ST's CPU to be the limit now,
+somewhere in the tens of KB/s; measure before quoting a number.
+
+FTP on v0.5 moved **~2 KB/s**, one 536-byte segment per ~266 ms, with
+the queue empty and nothing dropped. The slice lock-step does not
+explain that (it allows ~5 KB/s with one segment in flight), so it is
+something in STinG's TCP or the client, and a packet capture of the
+data connection is the next step if it persists. Two facts from
+STinG's source for that investigation: an outgoing datagram lands on
+the Internal port's receive queue and only reaches the WiFi port on the
+*next* slice (so an ACK leaves one to two slices after its data
+arrived), and `timer_work` skips a connection whose semaphore the
+application holds.
 
 Four theories were falsified against hardware, each cheap to re-invent:
 (1) RX queue overflow causing retransmits — `drop` is flat throughout
@@ -126,17 +151,20 @@ after a power cycle, despite the mechanism being confirmed in STinG's
 source (`fraction` divides the 200 Hz timer, `THREADING/5`). Going
 further needs instrumentation inside STinG, not more firmware changes.
 
-Other measured characteristics, so nobody re-derives them: round-trip time
-is ~60-210 ms (mean ~105 ms) and throughput is **~20 frames/s each
-way**. The RTT sawtooth snaps back by ~50 ms, which is how often STinG
-services the driver; combined with the design handing over exactly one
-frame per service, that fixes the ceiling at 20 frames/s by
-arithmetic -- confirmed over 223 packets with `q=0` and no drops. The
-fix is ours, not STinG's, and is in two halves: publish a ring of RX
-frames so `my_receive`'s existing budget loop can actually drain
-several per visit, and send more than one datagram per `my_send` (the
-one-per-call limit is inherited from the EtherNEC driver, where it was
-an NE2000 buffer constraint that does not apply to us).
+Other v0.5 measurements: round-trip time ~60-210 ms (mean ~105 ms),
+which is two 50 ms slices plus phase (the reply is picked up at one
+slice; the ICMP path runs in the same slice, but a TCP ACK would leave
+at the next). WiFi power save is not a factor: `WIFI_POWER` defaults
+to 0, which is the CYW43 "disabled" value.
+
+**Compatibility rule for the mailbox.** Any firmware must keep working
+with any driver: a SidecarT can be reflashed without the ST being
+touched, and a dead network is a support call. So `MB_PROTO_VERSION`
+stays 1, new firmware features are advertised in `MB_CAPS`, and the
+driver opts in through the version byte it sends with
+`MBC_DRIVER_HELLO` (1 = single window, 2 = ring). The single window
+at `$5000` and its fields are never moved. The host test
+(`tools/mailbox_test.c`) covers both modes and the switch between them.
 
 ## Build
 
@@ -167,6 +195,17 @@ when the two filenames match**, so the UF2 must be renamed to plain
 Upload the build output unrenamed and the app simply never appears in
 the menu, with nothing to say why.
 
+Releases are rolling and automatic: every push to `main` runs
+`.github/workflows/release.yml`, which builds with `make`, tags the
+version from `version.txt` (leaving an existing tag alone), moves the
+`latest` tag, and replaces the UF2 (renamed), the JSON and
+`sting-for-mdnet.zip` on the existing "latest" release. The UUID comes
+from the `APP_UUID_KEY` repository secret. Pull requests run
+`pr.yml`, the same build without the publish. Both use the
+`neilrackett/atarist-toolkit-docker-x86_64:latest` image (the only
+x86_64 tag published), so CI can drift from the `1.2.1` arm64 image
+local builds pin in `build.sh`.
+
 ### ⚠️ Build-system lessons (learned the hard way)
 
 - **`build.sh` has `set -e` — keep it.** It once didn't: a compile error
@@ -186,11 +225,11 @@ the menu, with nothing to say why.
 - Never grep build logs through filters that exclude `pico-sdk` paths
   when hunting errors — compile errors triggered *inside* SDK headers
   carry SDK paths and vanish from the filtered view.
-- Host-side tests: `cc -DMAILBOX_HOST_TEST -DAUTOCONF_HOST_TEST
-  -Irp/src/include -o /tmp/t tools/mailbox_test.c rp/src/mailbox.c
-  rp/src/autoconf.c && /tmp/t` — run after any `mailbox.c` or
-  `autoconf.c` change. Both guard macros are needed: each file uses its
-  own. (The netusbee branch keeps the NE2000 model tests.)
+- Host-side tests: `make test` (the `cc` line is in the Makefile; both
+  guard macros, `MAILBOX_HOST_TEST` and `AUTOCONF_HOST_TEST`, are
+  needed because each file uses its own) — run after any `mailbox.c`
+  or `autoconf.c` change. CI runs it first, before either toolchain.
+  (The netusbee branch keeps the NE2000 model tests.)
 
 ## Architecture
 
