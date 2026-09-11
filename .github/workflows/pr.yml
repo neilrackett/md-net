@@ -1,0 +1,67 @@
+name: PR
+
+# Does it build? That is the whole job. This runs the same `make` as
+# release.yml, so a PR that would break the release fails here instead,
+# but it tags nothing, publishes nothing and keeps no artifacts. The
+# host tests come first because they need only a C compiler: a broken
+# mailbox handshake fails in seconds rather than after two toolchains.
+
+on:
+  pull_request:
+    branches:
+      - main
+
+# Read-only: this workflow runs code from a contributor's branch, so it
+# gets nothing it does not need. release.yml holds the write token.
+permissions:
+  contents: read
+
+# A force-push mid-review should not leave two builds racing to report.
+concurrency:
+  group: pr-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout the code
+      # No submodules here: the m68k side needs none, and rp/build.sh
+      # inits and pins the Pico SDK tree itself.
+      uses: actions/checkout@v4
+
+    - name: Host tests
+      # The mailbox protocol and the ST address picker, compiled for the
+      # host with the runner's own compiler. Nothing else is needed.
+      run: make test
+
+    - name: Set up Python
+      # target/atarist/build.sh runs a bare "python", which ubuntu-latest
+      # does not have; setup-python puts one on PATH. Stdlib only.
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.x"
+
+    - name: Install the Pico Toolchain
+      run: |
+          sudo DEBIAN_FRONTEND=noninteractive apt update
+          sudo DEBIAN_FRONTEND=noninteractive apt install -y cmake gcc-arm-none-eabi libnewlib-arm-none-eabi build-essential libstdc++-arm-none-eabi-newlib
+
+    - name: Install AtariST Toolkit Docker image
+      # The installer names the image after the account and the host
+      # architecture. The driver is built with m68k-atari-mint-gcc, which
+      # is in the neilrackett images (the ones every local build uses),
+      # so install those rather than the upstream default; on this runner
+      # that is the x86_64 image, which only exists as :latest.
+      run: curl -sL https://github.com/sidecartridge/atarist-toolkit-docker/releases/latest/download/install_atarist_toolkit_docker.sh | DOCKER_ACCOUNT=neilrackett bash
+
+    - name: Build
+      # No APP_UUID_KEY on purpose. The Makefile falls back to the sample
+      # UUID, which is all a build check needs, and it keeps this working
+      # for pull requests from forks, where secrets are not available.
+      # STCMD_IMAGE points build.sh's direct docker run (the driver and
+      # installer step) at the same x86_64 image stcmd was installed with;
+      # its default is the arm64 image used on the development Macs.
+      env:
+        STCMD_IMAGE: neilrackett/atarist-toolkit-docker-x86_64:latest
+      run: make

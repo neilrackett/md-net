@@ -1,30 +1,57 @@
 name: Release
 
+# Rolling release: build with make, tag the version, move the
+# lightweight "latest" tag to this commit, and replace the files on the
+# existing "latest" release. The release's title and body are left
+# exactly as they are: gh release upload touches assets only.
+
 on:
-  # push:
-  #   tags:
-  #     - 'v*'
+  # Anything landing on main is a release: a merge, or a direct push.
+  # Tag pushes do not match a branch filter, so the tags this workflow
+  # pushes cannot trigger it again.
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
   contents: write
 
-jobs:
-  build:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        python-version: [ "3.10" ]
-        include:
-          - os: ubuntu-latest
-    steps:
-    - name: Checkout the code
-      uses: actions/checkout@v3
+# Two merges in quick succession would otherwise race: both force-move
+# the latest tag and clobber the same assets, and the loser decides
+# what the release ends up holding. Newest commit wins instead.
+concurrency:
+  group: release
+  cancel-in-progress: true
 
-    - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v2
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    # The push trigger already filters to main; this is what stops a
+    # manual dispatch from some other branch tagging and releasing it.
+    if: github.ref == 'refs/heads/main'
+    steps:
+    - name: Check the APP_UUID_KEY secret is set
+      # Without it, make would quietly fall back to the sample UUID and
+      # release under the wrong name. Fail here, before the toolchains.
+      env:
+        APP_UUID_KEY: ${{ secrets.APP_UUID_KEY }}
+      run: test -n "$APP_UUID_KEY" || { echo "The APP_UUID_KEY secret is not set."; exit 1; }
+
+    - name: Checkout the code
+      # No submodules here: the m68k side needs none, and rp/build.sh
+      # inits and pins the Pico SDK tree itself.
+      uses: actions/checkout@v4
+
+    - name: Host tests
+      run: make test
+
+    - name: Set up Python
+      # target/atarist/build.sh runs a bare "python", which ubuntu-latest
+      # does not have; setup-python puts one on PATH. Stdlib only.
+      uses: actions/setup-python@v5
       with:
-        python-version: ${{ matrix.python-version }}
+        python-version: "3.x"
 
     - name: Install the Pico Toolchain
       run: |
@@ -32,83 +59,50 @@ jobs:
           sudo DEBIAN_FRONTEND=noninteractive apt install -y cmake gcc-arm-none-eabi libnewlib-arm-none-eabi build-essential libstdc++-arm-none-eabi-newlib
 
     - name: Install AtariST Toolkit Docker image
-      run: curl -sL https://github.com/sidecartridge/atarist-toolkit-docker/releases/download/v1.3.0/install_atarist_toolkit_docker.sh | bash
+      # Track the latest installer: older ones took the image tag from
+      # the ambient $VERSION, which build.sh exports from version.txt, so
+      # CI went looking for an image tagged with the app's own version.
+      # The account is ours rather than the upstream default because the
+      # driver is built with m68k-atari-mint-gcc, which is in these
+      # images (they are what every local build uses too). On this
+      # runner that is the x86_64 image, which only exists as :latest.
+      run: curl -sL https://github.com/sidecartridge/atarist-toolkit-docker/releases/latest/download/install_atarist_toolkit_docker.sh | DOCKER_ACCOUNT=neilrackett bash
 
-    - name: Run - remove interactive
-      run: sed -i 's/-it//' /usr/local/bin/stcmd
-
-    - name: Install dependencies
-      run: |
-        pip install boto3
-          
-    - name: Resolve APP_UUID (falls back to the dev UUID when no secret is set)
+    - name: Build
+      # The Makefile skips the version bump, so this builds exactly what
+      # the tree says. The app UUID comes from the APP_UUID_KEY secret;
+      # uuid.txt is deliberately not committed. STCMD_IMAGE points
+      # build.sh's direct docker run (the driver and installer step) at
+      # the same x86_64 image stcmd was installed with; its default is
+      # the arm64 image used on the development Macs.
       env:
-        APP_UUID_SECRET: ${{ secrets.APP_UUID }}
-      run: echo "APP_UUID=${APP_UUID_SECRET:-44444444-4444-4444-8444-444444444444}" >> "$GITHUB_ENV"
+        APP_UUID_KEY: ${{ secrets.APP_UUID_KEY }}
+        STCMD_IMAGE: neilrackett/atarist-toolkit-docker-x86_64:latest
+      run: make
 
-    - name: Run - Build PICO_W release version
-      run: ./build.sh pico_w Release "$APP_UUID"
+    - name: Build the STinG bundle
+      # The ready-to-go STinG that the README sends people to. Not part
+      # of make because it downloads the stock distribution.
+      run: tools/make_sting_bundle.sh dist
 
-    - name: Get current date
-      id: build
-      run: echo "::set-output name=date::$(date -u +"%Y-%m-%d %H:%M:%S UTC")"
-
-    - name: Get version from version.txt
-      id: get_version
-      run: echo "RELEASE_VERSION=$(cat version.txt)" >> $GITHUB_ENV
-
-    - name: Read partial CHANGELOG.md content
-      id: changelog
+    - name: Tag the version and move latest
       run: |
-        echo "CHANGELOG<<EOF" >> $GITHUB_ENV
-        awk '/^---$/ { exit } { print }' CHANGELOG.md >> $GITHUB_ENV
-        echo "EOF" >> $GITHUB_ENV
+        VERSION=$(tr -d '\r\n' < version.txt)
+        if git rev-parse -q --verify "refs/tags/$VERSION" >/dev/null; then
+          echo "Tag $VERSION already exists; leaving it where it is."
+        else
+          git tag "$VERSION"
+        fi
+        git tag -f latest
+        git push origin "refs/tags/$VERSION" +refs/tags/latest
 
-    - name: Copy release artifacts
-      run: |
-        mkdir -p release
-        cp dist/*.uf2 release/
-        cp dist/*.json release/
-
-    - name: Upload the binaries to release
-      uses: svenstaro/upload-release-action@v2
-      with:
-        repo_token: ${{ secrets.GITHUB_TOKEN }}
-        file: release/*
-        tag: ${{ github.ref }}
-        release_name: ${{ env.RELEASE_VERSION }}
-        body: |
-          **Release Notes:**
-          - Build Date: ${{ steps.build.outputs.date }}
-          - Version: ${{ env.RELEASE_VERSION }}
-
-          ${{ env.CHANGELOG }}
-        file_glob: true
-        overwrite: true
-        make_latest: true
-
-    - name: Upload artifacts to S3
-      # Skip S3 publishing for development builds (the dev UUID). A real
-      # release sets the APP_UUID secret to the app's own UUID.
-      if: env.APP_UUID != '44444444-4444-4444-8444-444444444444'
+    - name: Replace the files on the latest release
+      # The SidecarT only lists the app when the UF2 and JSON share a
+      # name, so the versioned UF2 the build produces is renamed here.
       env:
-        AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-        AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-        AWS_DEFAULT_REGION: us-east-1  # or your bucket's region
+        GH_TOKEN: ${{ github.token }}
+        UUID: ${{ secrets.APP_UUID_KEY }}
       run: |
-        python3 <<EOF
-        import os
-        import boto3
-
-        s3 = boto3.client('s3')
-        release_dir = 'release'
-        bucket_name = 'atarist.sidecartridge.com'
-
-        for filename in os.listdir(release_dir):
-            local_path = os.path.join(release_dir, filename)
-            s3_path = filename  # uploaded at root of the bucket
-            print(f"Uploading {local_path} to s3://{bucket_name}/{s3_path}")
-            s3.upload_file(local_path, bucket_name, s3_path)
-        EOF
-
-  
+        VERSION=$(tr -d '\r\n' < version.txt)
+        cp "dist/$UUID-$VERSION.uf2" "dist/$UUID.uf2"
+        gh release upload latest "dist/$UUID.uf2" "dist/$UUID.json" dist/sting-for-mdnet.zip --clobber
