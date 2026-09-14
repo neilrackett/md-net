@@ -22,12 +22,12 @@ debug:
 	@echo "Using APP_UUID_KEY: $(APP_UUID_KEY_RESOLVED)"
 	./build.sh pico_w debug "$(APP_UUID_KEY_RESOLVED)"
 
-## Host-side tests: the mailbox protocol and the ST address picker,
-## built with the host compiler. Run after any mailbox.c / autoconf.c change.
+## Host-side tests: the mailbox protocol, built with the host compiler.
+## Run after any mailbox.c change.
 .PHONY: test
 test:
-	cc -DMAILBOX_HOST_TEST -DAUTOCONF_HOST_TEST -Irp/src/include \
-	   -o /tmp/mailbox_test tools/mailbox_test.c rp/src/mailbox.c rp/src/autoconf.c
+	cc -DMAILBOX_HOST_TEST -Irp/src/include \
+	   -o /tmp/mailbox_test tools/mailbox_test.c rp/src/mailbox.c
 	/tmp/mailbox_test
 
 ## Tag this version

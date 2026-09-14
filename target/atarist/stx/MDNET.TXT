@@ -50,8 +50,9 @@ To install by hand instead:
 
 CONFIGURING
 
-Nothing to do. MD/Net picks an address for your ST from your own
-network, checks nothing else is using it, and sets up the routing.
+Nothing to do. Your ST uses the address your router gives the
+cartridge, along with its netmask, gateway and nameserver, and
+MD/Net sets up the routing.
 
 To choose the address yourself instead, open STinG Port Setup,
 select the port named "WiFi", set the address and

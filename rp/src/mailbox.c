@@ -30,7 +30,6 @@
 #include <stdio.h>
 #define DPRINTF(...) printf(__VA_ARGS__)
 #else
-#include "autoconf.h"
 #include "cart_shared.h"
 #include "commemul.h"
 #include "debug.h"
@@ -318,7 +317,7 @@ void mailbox_on_rom3_sample(uint16_t sample) {
   }
 }
 
-bool mailbox_rx_wanted(const uint8_t *f, uint16_t len, uint32_t own_ip) {
+bool mailbox_rx_wanted(const uint8_t *f, uint16_t len) {
   uint16_t type;
   uint32_t dst;
   if (len < 14u) {
@@ -333,11 +332,22 @@ bool mailbox_rx_wanted(const uint8_t *f, uint16_t len, uint32_t own_ip) {
   }
   dst = ((uint32_t)f[30] << 24) | ((uint32_t)f[31] << 16) |
         ((uint32_t)f[32] << 8) | (uint32_t)f[33];
-  if (dst == own_ip) {
-    return false;  // the Pico's own traffic (DHCP renewals, probes)
-  }
   if ((dst >> 28) == 0xEu) {
     return false;  // multicast
+  }
+  // The ST and the Pico share one address, and everything arriving for
+  // it is the ST's -- except DHCP, which lwIP holds the lease for. Drop
+  // replies to the client port (unicast or broadcast) so the ST never
+  // sees them; the IHL nibble gives the UDP header offset.
+  if (f[23] == 17u) {
+    uint16_t ihl = (uint16_t)((f[14] & 0x0Fu) * 4u);
+    uint16_t udp = (uint16_t)(14u + ihl);
+    if (ihl >= 20u && (uint32_t)udp + 4u <= (uint32_t)len) {
+      uint16_t dport = (uint16_t)(((uint16_t)f[udp + 2u] << 8) | f[udp + 3u]);
+      if (dport == 68u) {
+        return false;
+      }
+    }
   }
   return true;
 }
@@ -356,11 +366,9 @@ static err_t mailbox_netif_input(struct pbuf *p, struct netif *inp) {
   if (len >= 14u && len <= MB_FRAME_MAX) {
     static uint8_t rxbuf[MB_FRAME_MAX];
     pbuf_copy_partial(p, rxbuf, len, 0);
-    autoconf_observe(rxbuf, len);  // watch for defenders of our candidate
     // Every frame handed over costs the ST a service slot whether it
     // wants the frame or not, so filter here rather than in the driver.
-    if (mailbox_rx_wanted(rxbuf, len,
-                          lwip_ntohl(ip4_addr_get_u32(netif_ip4_addr(inp))))) {
+    if (mailbox_rx_wanted(rxbuf, len)) {
       mailbox_rx_enqueue(rxbuf, len);
     }
   }

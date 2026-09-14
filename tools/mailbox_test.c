@@ -18,7 +18,6 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "autoconf.h"
 #include "mailbox.h"
 
 extern uint8_t mailbox_test_rom[0x10000];
@@ -235,26 +234,33 @@ static void test_mode_switch_back(void) {
 // The RP-side filter: only what the ST could want costs it a slot.
 static void test_rx_filter(void) {
   uint8_t f[64];
-  const uint32_t own = 0xC0A801F1u;  // 192.168.1.241
   memset(f, 0, sizeof(f));
   f[12] = 0x08; f[13] = 0x06;
-  assert(mailbox_rx_wanted(f, 60, own) && "ARP wanted");
+  assert(mailbox_rx_wanted(f, 60) && "ARP wanted");
   f[12] = 0x86; f[13] = 0xDD;
-  assert(!mailbox_rx_wanted(f, 60, own) && "IPv6 dropped");
+  assert(!mailbox_rx_wanted(f, 60) && "IPv6 dropped");
   f[12] = 0x08; f[13] = 0x00;
-  f[30] = 0xC0; f[31] = 0xA8; f[32] = 0x01; f[33] = 0xF2;
-  assert(mailbox_rx_wanted(f, 60, own) && "IP to the ST wanted");
-  assert(!mailbox_rx_wanted(f, 20, own) && "truncated IP dropped");
-  f[33] = 0xFF;
-  assert(mailbox_rx_wanted(f, 60, own) && "subnet broadcast wanted");
-  f[30] = f[31] = f[32] = f[33] = 0xFF;
-  assert(mailbox_rx_wanted(f, 60, own) && "limited broadcast wanted");
+  f[14] = 0x45;  // IPv4, 20-byte header
   f[30] = 0xC0; f[31] = 0xA8; f[32] = 0x01; f[33] = 0xF1;
-  assert(!mailbox_rx_wanted(f, 60, own) && "Pico's own unicast dropped");
+  assert(mailbox_rx_wanted(f, 60) && "unicast to the shared address wanted");
+  assert(!mailbox_rx_wanted(f, 20) && "truncated IP dropped");
+  f[33] = 0xFF;
+  assert(mailbox_rx_wanted(f, 60) && "subnet broadcast wanted");
+  f[30] = f[31] = f[32] = f[33] = 0xFF;
+  assert(mailbox_rx_wanted(f, 60) && "limited broadcast wanted");
+  // DHCP is lwIP's: a reply to the client port never reaches the ST.
+  f[23] = 17;                 // UDP
+  f[34] = 0x00; f[35] = 67;   // source port 67
+  f[36] = 0x00; f[37] = 68;   // destination port 68
+  assert(!mailbox_rx_wanted(f, 60) && "broadcast DHCP reply dropped");
+  f[30] = 0xC0; f[31] = 0xA8; f[32] = 0x01; f[33] = 0xF1;
+  assert(!mailbox_rx_wanted(f, 60) && "unicast DHCP reply dropped");
+  f[36] = 0x00; f[37] = 53;   // destination port 53
+  assert(mailbox_rx_wanted(f, 60) && "other UDP wanted");
   f[30] = 0xE0; f[31] = 0x00; f[32] = 0x00; f[33] = 0xFB;
-  assert(!mailbox_rx_wanted(f, 60, own) && "multicast dropped");
-  assert(!mailbox_rx_wanted(f, 10, own) && "runt dropped");
-  printf("PASS: RX filter (ARP, IP for the ST, broadcasts; not own/multicast/IPv6)\n");
+  assert(!mailbox_rx_wanted(f, 60) && "multicast dropped");
+  assert(!mailbox_rx_wanted(f, 10) && "runt dropped");
+  printf("PASS: RX filter (ARP, IP for the ST, broadcasts; not DHCP/multicast/IPv6)\n");
 }
 
 static void test_decode_matches_driver_encoding(void) {
@@ -270,37 +276,6 @@ static void test_decode_matches_driver_encoding(void) {
   printf("PASS: ROM3 channel/data encode-decode round trip\n");
 }
 
-// Address selection for the ST: it must never offer the Pico's own
-// address, the network address or the broadcast address, and it should
-// start just above the Pico so a lease of .241 offers the ST .242.
-static void test_autoconf_candidates(void) {
-  uint32_t ip = 0xC0A801F1u;   // 192.168.1.241
-  uint32_t mask = 0xFFFFFF00u; // /24
-  uint32_t seen[8];
-  int i, j;
-
-  for (i = 0; i < 8; i++) {
-    seen[i] = autoconf_candidate(ip, mask, (uint8_t)i);
-    assert(seen[i] != 0 && "a /24 has plenty of room");
-    assert((seen[i] & mask) == (ip & mask) && "stays in our subnet");
-    assert(seen[i] != ip && "never our own address");
-    assert((seen[i] & ~mask) != 0 && "never the network address");
-    assert((seen[i] & ~mask) != ~mask && "never the broadcast address");
-    for (j = 0; j < i; j++) assert(seen[j] != seen[i] && "no repeats");
-  }
-  assert(seen[0] == 0xC0A801F2u && ".241 offers the ST .242");
-  assert(seen[1] == 0xC0A801F3u && "then .243");
-
-  // Wrapping past .254 must skip .255 and .0 and continue at .1.
-  assert(autoconf_candidate(0xC0A801FDu, mask, 0) == 0xC0A801FEu);
-  assert(autoconf_candidate(0xC0A801FDu, mask, 1) == 0xC0A80101u);
-
-  // A subnet with no room for a second host must refuse.
-  assert(autoconf_candidate(ip, 0xFFFFFFFFu, 0) == 0 && "/32 has no room");
-  assert(autoconf_candidate(ip, 0xFFFFFFFEu, 0) == 0 && "/31 has no room");
-  printf("PASS: ST address selection (subnet, skips, wrap, exhaustion)\n");
-}
-
 int main(void) {
   test_decode_matches_driver_encoding();
   test_tx_roundtrip();
@@ -310,7 +285,6 @@ int main(void) {
   test_rx_ring_partial_ack_at_wrap();
   test_mode_switch_back();
   test_rx_filter();
-  test_autoconf_candidates();
   printf("all mailbox tests pass\n");
   return 0;
 }

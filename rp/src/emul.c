@@ -29,10 +29,6 @@
 
 #include "aconfig.h"
 #include "autoconf.h"
-
-// Ceiling on ARP probing before we announce ourselves: 8 candidates
-// at ~1 s each, plus slack.
-#define AUTOCONF_BUDGET_MS 10000
 #include "cart_shared.h"
 #include "commemul.h"
 #include "debug.h"
@@ -151,9 +147,9 @@ void emul_start() {
   } else {
     // Bring up the cart-bus mailbox: publishes the protocol magic, MAC
     // and network config into the ROM4 window and installs the WiFi RX
-    // tap (which autoconf needs, to see ARP replies). The cartridge
-    // image is left intact -- the mailbox fields live outside it, so
-    // even a warm reset still boots with the banner.
+    // tap that feeds the ST its frames. The cartridge image is left
+    // intact -- the mailbox fields live outside it, so even a warm
+    // reset still boots with the banner.
     mailbox_init();
 
     // Publish the installer's payload (the driver + its notes) into the
@@ -161,19 +157,10 @@ void emul_start() {
     // writes the driver matching this firmware.
     payload_publish();
 
-    // Choose an address for the ST out of our own subnet, so a stock
-    // machine needs no manual IP configuration. Finish this before
-    // announcing ourselves: the address the ST will use is the one
-    // worth putting on screen, and the ST is still polling for a
-    // terminal status meanwhile (its own timeout is 65 s, and the
-    // worst case here is a few seconds of ARP probing).
+    // Hand the ST our own configuration, so a stock machine needs no
+    // manual IP setup. Do it before announcing ourselves: the address
+    // the ST will use is the one worth putting on screen.
     autoconf_start();
-    absolute_time_t deadline = make_timeout_time_ms(AUTOCONF_BUDGET_MS);
-    while (!autoconf_done() && !time_reached(deadline)) {
-      autoconf_poll();
-      network_safePoll();
-      cyw43_arch_wait_for_work_until(make_timeout_time_ms(1));
-    }
 
     uint32_t stIp = autoconf_address();
     if (stIp != 0u) {
@@ -198,7 +185,6 @@ void emul_start() {
   DPRINTF("Entering main loop\n");
   while (true) {
     mailbox_poll();
-    autoconf_poll();
     network_safePoll();
     cyw43_arch_wait_for_work_until(make_timeout_time_ms(1));
     select_checkPushReset();
