@@ -130,14 +130,14 @@ MD/Net takes its network parameters from the **Booster global configuration**, s
 
 If the SSID is empty or the connection fails, MD/Net prints the failure on the ST and still boots to GEM — it never leaves you stuck at a black screen.
 
-**The ST's own address is separate, and you don't set it.** The ST
-can't take a DHCP lease of its own — it shares the cartridge's MAC
-address, because a WiFi station link won't carry a second one — so the
-cartridge picks an address for it instead: same subnet as its own lease,
-counting up from its own host number (a cartridge on `.241` offers the
-ST `.242`), and checked with ARP probes so nothing already using it gets
-trampled. `WIFI_DNS` is used as the ST's nameserver if your router
-doesn't supply one.
+**The ST's own address is set for you.** The ST can't take a DHCP lease
+of its own — it shares the cartridge's MAC address, because a WiFi
+station link won't carry a second one — so it simply uses the address
+your router gives the cartridge, with the same netmask, gateway and
+nameserver. The ST and the cartridge appear on your network as one
+device, under the cartridge's MAC address and hostname, so a DHCP
+reservation for that MAC fixes the ST's address too. `WIFI_DNS` is used
+as the ST's nameserver if your router doesn't supply one.
 
 To choose the ST's address yourself, set it in STinG Port Setup; an
 address set by hand always wins.

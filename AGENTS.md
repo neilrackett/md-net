@@ -225,11 +225,10 @@ local builds pin in `build.sh`.
 - Never grep build logs through filters that exclude `pico-sdk` paths
   when hunting errors — compile errors triggered *inside* SDK headers
   carry SDK paths and vanish from the filtered view.
-- Host-side tests: `make test` (the `cc` line is in the Makefile; both
-  guard macros, `MAILBOX_HOST_TEST` and `AUTOCONF_HOST_TEST`, are
-  needed because each file uses its own) — run after any `mailbox.c`
-  or `autoconf.c` change. CI runs it first, before either toolchain.
-  (The netusbee branch keeps the NE2000 model tests.)
+- Host-side tests: `make test` (the `cc` line is in the Makefile, with
+  the `MAILBOX_HOST_TEST` guard macro) — run after any `mailbox.c`
+  change. CI runs it first, before either toolchain. (The netusbee
+  branch keeps the NE2000 model tests.)
 
 ## Architecture
 
@@ -327,9 +326,14 @@ producing "impossible" corruption that mimics byte-order bugs.
   `pico/platform.h`, which `#error`s). Frame delivery yields to the taps
   every 64 bytes (`ne2000_set_yield`).
 - **Core 0** owns WiFi/lwIP. The RX tap wraps the STA netif input:
-  queue for Core 1, then chain to lwIP (shared-MAC design — STinG uses
-  the Pico's own CYW43 MAC; lwIP ignores `.242`-destined traffic).
-  SPSC queues both directions; RX consume is zero-copy (peek/advance).
+  queue for Core 1, then chain to lwIP. SPSC queues both directions; RX
+  consume is zero-copy (peek/advance). Shared-MAC *and* shared-address
+  design: STinG uses the Pico's own CYW43 MAC and the address lwIP
+  leased, so lwIP is compiled mute — `LWIP_TCP` and `LWIP_ICMP` are 0,
+  and the RX filter keeps only DHCP replies (UDP port 68) for lwIP,
+  handing the ST everything else. **Never re-enable TCP or ICMP, or put
+  a server on the Pico, without solving that first**: lwIP would RST the
+  ST's inbound connections and answer its pings twice.
 - **UART logging blocks Core 0** (~87 µs/char at 115200): a long debug
   line stalls WiFi servicing ~20 ms. Keep diagnostics terse, filter idle
   spam, or they perturb the very traffic under test (production `make
@@ -398,7 +402,8 @@ write macro composes `(reg<<8|data)` then doubles it.
   the file take effect.
 - Only one Ethernet driver active: `INSTALL.TOS` renames `ENEC.STX` to
   `ENEC.ST_`, the same convention STinG users already use.
-- Reserve the ST's static IP in the router's DHCP settings.
+- To pin the ST's address, reserve it in the router's DHCP settings
+  against the cartridge's MAC: the ST uses the cartridge's lease.
 - Warm-reset caveat: after `mdnet_activate()` repaints the register map,
   the cartridge magic is gone — a warm ST reset boots without the
   banner (networking still works); power-cycle the SidecarT to see it.

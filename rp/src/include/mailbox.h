@@ -87,10 +87,11 @@ void mailbox_publish_config(uint32_t ip, uint32_t mask, uint32_t gw,
                             uint32_t dns);
 
 // Is this received frame worth a slot on the ST? Only ARP and IP get
-// through, and of IP only what the ST could want: not the Pico's own
-// unicast traffic (lwIP handles that) and not multicast (STinG has
-// none). own_ip is the Pico's STA address in host order.
-bool mailbox_rx_wanted(const uint8_t *frame, uint16_t len, uint32_t own_ip);
+// through, and of IP only what the ST could want: the ST and the Pico
+// share one address, so everything for it is the ST's except DHCP
+// replies (lwIP holds the lease), and multicast is dropped because
+// STinG has none.
+bool mailbox_rx_wanted(const uint8_t *frame, uint16_t len);
 
 // Host-test seams: the RX publish queue and the publish step.
 bool mailbox_rx_enqueue(const uint8_t *frame, uint16_t len);

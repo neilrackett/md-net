@@ -33,7 +33,12 @@
 #define PBUF_POOL_SIZE 12
 #define LWIP_ARP 1
 #define LWIP_ETHERNET 1
-#define LWIP_ICMP 1
+// The ST uses the very address this stack leases, so lwIP must stay
+// mute: an ICMP echo reply from here would double every ping the ST
+// answers, and a TCP stack here would RST inbound connections the ST
+// is trying to accept. DHCP is the exception -- it is lwIP's job, and
+// it is UDP. The TCP tuning macros below are inert with LWIP_TCP 0.
+#define LWIP_ICMP 0
 #define LWIP_RAW 0
 #define TCP_MSS 1460
 #define TCP_WND (4 * TCP_MSS)
@@ -51,7 +56,7 @@
 #define LWIP_CHKSUM_ALGORITHM 3
 #define LWIP_DHCP 1
 #define LWIP_IPV4 1
-#define LWIP_TCP 1
+#define LWIP_TCP 0
 #define LWIP_UDP 1
 #define LWIP_DNS 1
 #define LWIP_TCP_KEEPALIVE 0
