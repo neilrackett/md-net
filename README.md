@@ -177,6 +177,19 @@ make uart
 
 MD/Net only builds for the `pico_w` board, since WiFi is required. The app UUID is taken from `uuid.txt` (generate a fresh one per app). If you'd like more information about coding for the SidecarT, [the docs are here](https://docs.sidecartridge.com/sidecartridge-multidevice/programming/).
 
+### Running it on your computer
+
+MD/Net also runs in [Hatari](https://www.hatari-emu.org) on your Mac or Linux PC, with [EmuMD](https://github.com/neilrackett/emumd) (in `emu/emumd`) standing in for the Multi-device, WiFi included: it joins "WiFi" that is really your computer's own connection, and the ST gets online through it, with your computer itself at `10.0.2.2`.
+
+```bash
+git submodule update --init emu/emumd
+emu/emumd/tools/mdfw hatari   # once: the Hatari that runs it, and EmuTOS
+emu/emumd/tools/mdfw run      # build build/md-net.mdfw and run it
+emu/test.sh                   # install STinG and fetch a page through it, headless
+```
+
+It needs libslirp (`brew install libslirp pkg-config`, or `sudo apt install libslirp-dev libglib2.0-dev pkg-config`), and `emu/test.sh` needs stcmd for its ST program and, once, the network for the STinG bundle. To try STinG yourself, unzip the bundle (`tools/make_sting_bundle.sh build`) into a folder with `INSTALL.TOS` and give it to Hatari as drive C: with `mdfw run --harddrive DIR`. See [EmuMD's guide](https://github.com/neilrackett/emumd/blob/main/docs/GUIDE.md) for more.
+
 ## The road not taken
 
 MD/Net began as a NetUSBee emulator: reproduce the NE2000 on the

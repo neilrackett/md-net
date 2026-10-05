@@ -185,6 +185,25 @@ Requirements: ARM GNU toolchain (`PICO_TOOLCHAIN_PATH`),
 must be running** — and the pinned submodules (pico-sdk 2.2.0 etc.,
 re-pinned by the build).
 
+### On your computer (EmuMD)
+
+`emu/emumd` (a submodule) builds the firmware for the host and runs it
+in Hatari, WiFi included (`mdfw.ini`, `template = sidecartridge`: the
+firmware's own `main()` runs, with EmuMD standing in for romemul,
+commemul, SELECT, the SD card driver and the Booster). The ST's network
+is the host's, through libslirp: the cartridge leases 10.0.2.15, and
+10.0.2.2 is the host. `emu/emumd/tools/mdfw build`, then `mdfw run`
+(`--headless --frames N --screenshot out.png` in automation).
+`emu/test.sh` is the end-to-end check: it puts the STinG bundle on a
+GEMDOS drive, runs `INSTALL.TOS`, reboots, and has `STNGTEST.TOS`
+(`emu/test`, built `-mshort` without the C library, like the driver)
+fetch a page from a server on the host through STinG, `MDNET.STX` and
+the mailbox. Under EmuMD a GEMDOS drive keeps the cartridge's boot stub
+from running, so STinG can load before the firmware has published its
+lease; in practice the firmware is up long before. Timing and speed are
+not the hardware's: measure those on a real SidecarT. See
+`emu/emumd/docs/GUIDE.md`.
+
 ### Releasing
 
 The build names the firmware `<uuid>-<version>.uf2` (deliberately — the
