@@ -191,7 +191,9 @@ make emu-test                 # install STinG and fetch a page through it, headl
 
 EmuMD boots EmuTOS unless you give it another TOS image with `TOS=/path/to/tos.img`.
 
-It needs libslirp (`brew install libslirp pkg-config`, or `sudo apt install libslirp-dev libglib2.0-dev pkg-config`), and `emu/test.sh` needs stcmd for its ST program and, once, the network for the STinG bundle. To try STinG yourself, unzip the bundle (`tools/make_sting_bundle.sh build`) into a folder with `INSTALL.TOS` and give it to Hatari as drive C: with `emu/emumd/tools/mdfw run --harddrive DIR` (or `harddrive = DIR` in `mdfw.ini`'s `[run]`, for `make emu`). See [EmuMD's guide](https://github.com/neilrackett/emumd/blob/main/docs/GUIDE.md) for more.
+It needs libslirp (`brew install libslirp pkg-config`, or `sudo apt install libslirp-dev libglib2.0-dev pkg-config`), and `emu/test.sh` needs stcmd for its ST program and, once, the network for the STinG bundle.
+
+`make emu` runs it at 640x480 in 16 colours (Hatari's extended VDI), with `build/hdd` as drive C: (not in git, and empty until you fill it). Both hide the cartridge's boot banner and its drive, so STinG goes on C: instead: run `make emu-test` once, which builds the STinG bundle and the installer, then unzip `build/sting-for-mdnet.zip` into `build/hdd`, copy `target/atarist/stx/INSTALL.TOS` there too, and run `C:\INSTALL.TOS` once. Change either in `mdfw.ini`'s `[run]`. See [EmuMD's guide](https://github.com/neilrackett/emumd/blob/main/docs/GUIDE.md) for more.
 
 ## The road not taken
 
