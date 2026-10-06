@@ -184,11 +184,14 @@ MD/Net also runs in [Hatari](https://www.hatari-emu.org) on your Mac or Linux PC
 ```bash
 git submodule update --init emu/emumd
 emu/emumd/tools/mdfw hatari   # once: the Hatari that runs it, and EmuTOS
-emu/emumd/tools/mdfw run      # build build/md-net.mdfw and run it
-emu/test.sh                   # install STinG and fetch a page through it, headless
+make emu                      # build build/md-net.mdfw and run it
+make emu RECORD=mdnet.avi     # the same, recording picture and sound until you quit
+make emu-test                 # install STinG and fetch a page through it, headless
 ```
 
-It needs libslirp (`brew install libslirp pkg-config`, or `sudo apt install libslirp-dev libglib2.0-dev pkg-config`), and `emu/test.sh` needs stcmd for its ST program and, once, the network for the STinG bundle. To try STinG yourself, unzip the bundle (`tools/make_sting_bundle.sh build`) into a folder with `INSTALL.TOS` and give it to Hatari as drive C: with `mdfw run --harddrive DIR`. See [EmuMD's guide](https://github.com/neilrackett/emumd/blob/main/docs/GUIDE.md) for more.
+EmuMD boots EmuTOS unless you give it another TOS image with `TOS=/path/to/tos.img`.
+
+It needs libslirp (`brew install libslirp pkg-config`, or `sudo apt install libslirp-dev libglib2.0-dev pkg-config`), and `emu/test.sh` needs stcmd for its ST program and, once, the network for the STinG bundle. To try STinG yourself, unzip the bundle (`tools/make_sting_bundle.sh build`) into a folder with `INSTALL.TOS` and give it to Hatari as drive C: with `emu/emumd/tools/mdfw run --harddrive DIR` (or `harddrive = DIR` in `mdfw.ini`'s `[run]`, for `make emu`). See [EmuMD's guide](https://github.com/neilrackett/emumd/blob/main/docs/GUIDE.md) for more.
 
 ## The road not taken
 

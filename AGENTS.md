@@ -192,9 +192,9 @@ in Hatari, WiFi included (`mdfw.ini`, `template = sidecartridge`: the
 firmware's own `main()` runs, with EmuMD standing in for romemul,
 commemul, SELECT, the SD card driver and the Booster). The ST's network
 is the host's, through libslirp: the cartridge leases 10.0.2.15, and
-10.0.2.2 is the host. `emu/emumd/tools/mdfw build`, then `mdfw run`
-(`--headless --frames N --screenshot out.png` in automation).
-`emu/test.sh` is the end-to-end check: it puts the STinG bundle on a
+10.0.2.2 is the host. `make emu` builds and runs it (`emu/emu.mk`; in automation,
+`emu/emumd/tools/mdfw run --headless --frames N --screenshot out.png`).
+`make emu-test` (`emu/test.sh`) is the end-to-end check: it puts the STinG bundle on a
 GEMDOS drive, runs `INSTALL.TOS`, reboots, and has `STNGTEST.TOS`
 (`emu/test`, built `-mshort` without the C library, like the driver)
 fetch a page from a server on the host through STinG, `MDNET.STX` and

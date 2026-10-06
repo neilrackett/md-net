@@ -6,12 +6,21 @@ name: Release
 # exactly as they are: gh release upload touches assets only.
 
 on:
-  # Anything landing on main is a release: a merge, or a direct push.
-  # Tag pushes do not match a branch filter, so the tags this workflow
-  # pushes cannot trigger it again.
+  # Anything landing on main is a release: a merge, or a direct push,
+  # unless all it changes is in paths-ignore (run it by hand to release
+  # one of those anyway). Tag pushes do not match a branch filter, so the
+  # tags this workflow pushes cannot trigger it again.
   push:
     branches:
       - main
+    # Documentation and the EmuMD host build (emu/, including the
+    # submodule, and mdfw.ini) are not part of the firmware, so a change
+    # to nothing else does not need building. Keep this list the same in
+    # pr.yml and release.yml.
+    paths-ignore:
+      - '**.md'
+      - 'emu/**'
+      - 'mdfw.ini'
   workflow_dispatch:
 
 permissions:

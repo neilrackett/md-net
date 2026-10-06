@@ -10,6 +10,14 @@ on:
   pull_request:
     branches:
       - main
+    # Documentation and the EmuMD host build (emu/, including the
+    # submodule, and mdfw.ini) are not part of the firmware, so a change
+    # to nothing else does not need building. Keep this list the same in
+    # pr.yml and release.yml.
+    paths-ignore:
+      - '**.md'
+      - 'emu/**'
+      - 'mdfw.ini'
 
 # Read-only: this workflow runs code from a contributor's branch, so it
 # gets nothing it does not need. release.yml holds the write token.

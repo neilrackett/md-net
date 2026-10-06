@@ -22,6 +22,9 @@ debug:
 	@echo "Using APP_UUID_KEY: $(APP_UUID_KEY_RESOLVED)"
 	./build.sh pico_w debug "$(APP_UUID_KEY_RESOLVED)"
 
+## make emu: run it in Hatari on this computer (emu/emu.mk)
+include emu/emu.mk
+
 ## Host-side tests: the mailbox protocol, built with the host compiler.
 ## Run after any mailbox.c change.
 .PHONY: test
